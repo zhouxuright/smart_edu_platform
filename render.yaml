@@ -1,16 +1,17 @@
-# Render Blueprint：一条 yaml 建出「后端容器 + 持久卷」。
+# Render Blueprint：一条 yaml 建出「单服务容器 + 持久卷」。
 #
 # 用法：Render 控制台 → New → Blueprint → 选这个仓库。
-# 注意先把服务的 Root Directory 指到 backend（下面 rootDir 已声明）。
+# 仓库根目录就是构建上下文，不需要设置 Root Directory。
 #
 # 数据库不在这里建：Render 免费 Postgres 30 天到期就删库，不适合当长期方案。
 # 用 Neon（永久免费 0.5GB），建好后把连接串粘到 DATABASE_URL。
+#
+# 单服务模式：同一个容器同时提供前端页面和 API，只需要一个 URL，不用配 CORS。
 
 services:
   - type: web
-    name: qicheng-api
+    name: qicheng
     runtime: docker
-    rootDir: backend
     dockerfilePath: ./Dockerfile
     region: singapore
     # free：$0，但 512MB 内存 + 15 分钟无访问休眠（冷启动约 1 分钟）+ 不能挂盘，
@@ -36,11 +37,10 @@ services:
         value: deepseek-chat
       - key: SECRET_KEY
         generateValue: true # Render 自动生成随机串
+      # 单服务同源，本来不需要 CORS；留着通配符不影响
       - key: CORS_ORIGINS
-        sync: false # 填 Vercel 域名，如 https://qicheng.vercel.app
+        value: "*"
       - key: EMBEDDING_PROVIDER
         value: local
       - key: DB_ECHO
         value: "false"
-      - key: PYTHONUNBUFFERED
-        value: "1"

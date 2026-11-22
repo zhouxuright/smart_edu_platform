@@ -1,0 +1,41 @@
+# 构建上下文是仓库根目录，这里排掉所有不该进镜像的东西。
+# 注意：frontend/dist 也要排 —— 镜像里会自己构建，带上本地产物只会让缓存失效。
+
+.git
+.gitignore
+.gitattributes
+.github
+.workbuddy-ai
+.cadence
+.idea
+.vscode
+.ruff_cache
+
+# 前端
+frontend/node_modules
+frontend/dist
+frontend/.vite
+frontend/scripts/out
+
+# Python
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.venv
+**/venv
+
+# 密钥与运行期数据
+backend/.env
+backend/.env.*
+backend/uploads
+backend/storage
+backend/*.db
+backend/*.log
+**/faiss.index
+**/faiss_meta.json
+**/.cache
+
+# 文档与个人文件（镜像里用不到）
+docs
+*.pdf
+*.md

@@ -18,6 +18,7 @@
 ## 目录结构
 
 ```
+Dockerfile        单服务镜像：前端构建 + 后端运行打成一个容器
 backend/          FastAPI 服务
   edu_app/
     api/          路由层（endpoints / resumes / applications / internship_plans / agent_chat ...）
@@ -25,7 +26,6 @@ backend/          FastAPI 服务
     models/       SQLAlchemy 模型
     services/     领域逻辑（简历存储、计划存储、向量化、额度、鉴权）
   scripts/        验收脚本与运维脚本
-  Dockerfile      后端镜像
 frontend/         React 前端
   src/components/AgentDock.jsx   全局对话助手 + 提案确认卡片
   scripts/        Puppeteer 端到端验收
@@ -58,13 +58,23 @@ npm run dev
 
 ## 部署
 
-前端可放 Vercel，**后端不行**——项目有常驻后台任务、写本地盘、依赖体积超函数上限。
-推荐 Vercel + Railway + Neon，步骤和踩坑见 [`docs/deploy.md`](docs/deploy.md)。
+**一个容器全包**：前端构建产物和后端打进同一个镜像，同一个 URL 同时提供页面和 API。
+不需要单独托管前端，也不存在跨域问题。
+
+后端不能放 Vercel——项目有常驻后台任务、写本地盘、依赖体积超函数上限。
+推荐 **Railway（容器 + 持久卷）+ Neon（Postgres）**，约 $5/月。
+步骤和踩坑见 [`docs/deploy.md`](docs/deploy.md)。
+
+```bash
+# 本地验证镜像（在仓库根目录，不是 backend/）
+docker build -t qicheng:latest .
+docker run -p 8000:8000 --env-file backend/.env -e DATA_DIR=/data -v "$PWD/data:/data" qicheng:latest
+```
 
 部署后跑一遍冒烟：
 
 ```bash
-python backend/scripts/smoke_remote.py https://你的后端域名 --origin https://你的前端域名
+python backend/scripts/smoke_remote.py https://你的域名 --origin https://你的域名
 ```
 
 ## Agent 框架

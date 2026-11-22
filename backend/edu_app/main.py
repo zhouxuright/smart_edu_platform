@@ -1,8 +1,12 @@
+import mimetypes
 import os
 # Fix for OpenMP duplicate runtime error (OMP: Error #15)
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
-from fastapi import FastAPI, Request
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
@@ -178,6 +182,71 @@ async def audit_logger(request: Request, call_next):
     return response
 
 
+# ---------------------------------------------------------------------------
+# 前端静态目录（单服务模式）
+# ---------------------------------------------------------------------------
+_raw_dist = os.getenv("FRONTEND_DIST", "").strip()
+FRONTEND_DIST = Path(_raw_dist).expanduser() if _raw_dist else None
+SPA_READY = bool(FRONTEND_DIST and FRONTEND_DIST.is_dir())
+if SPA_READY:
+    logging.info("前端静态目录已启用: %s", FRONTEND_DIST)
+
+
+def _spa_file(path: Path) -> FileResponse:
+    """按文件类型给缓存头。
+
+    Vite 产物名里带内容哈希，可以长缓存；index.html 和 sw.js 绝不能缓存，
+    否则用户会一直拿到旧壳子，Service Worker 也更新不了。
+    """
+    name = path.name
+    if name == "sw.js":
+        headers = {"Cache-Control": "no-cache, must-revalidate"}
+    elif name in ("index.html", "manifest.webmanifest"):
+        headers = {"Cache-Control": "no-cache"}
+    else:
+        headers = {"Cache-Control": "public, max-age=31536000, immutable"}
+
+    media = mimetypes.guess_type(name)[0] or "application/octet-stream"
+    if name.endswith(".webmanifest"):
+        media = "application/manifest+json"
+    return FileResponse(path, media_type=media, headers=headers)
+
+
 @app.get("/")
 async def root():
+    if SPA_READY:
+        return _spa_file(FRONTEND_DIST / "index.html")
     return {"message": "Welcome to the AI Agent Education Platform API"}
+
+
+# ---------------------------------------------------------------------------
+# 单服务模式：同一个容器同时提供 API 和前端静态文件
+#
+# 只在 FRONTEND_DIST 指向一个真实存在的目录时启用（镜像里设成 /app/frontend_dist）。
+# 本地开发不设这个变量，行为与前后端分离时完全一致。
+#
+# 为什么不直接 app.mount("/", StaticFiles(html=True))：那样 SPA 的深层链接
+# （/dashboard、/resume/3）会 404 —— 磁盘上没有对应文件，StaticFiles 不会回退到
+# index.html。前端用的是 history 路由，必须自己兜底。
+# ---------------------------------------------------------------------------
+if SPA_READY:
+    if (FRONTEND_DIST / "assets").is_dir():
+        app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIST / "assets")), name="spa-assets")
+
+    # 这些前缀是真实接口，没匹配到就该 404，不能回退成 index.html ——
+    # 否则前端拿到一段 HTML 去 JSON.parse，报错信息会完全指错方向
+    _API_PREFIXES = ("api", "static", "docs", "redoc", "openapi.json", "metrics")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str):
+        head = full_path.split("/", 1)[0]
+        if head in _API_PREFIXES:
+            raise HTTPException(status_code=404, detail="Not Found")
+
+        target = (FRONTEND_DIST / full_path).resolve()
+        root_dir = FRONTEND_DIST.resolve()
+        # 防路径穿越：解析后必须仍在 dist 目录内
+        if target.is_file() and target.is_relative_to(root_dir):
+            return _spa_file(target)
+        return _spa_file(root_dir / "index.html")
+
