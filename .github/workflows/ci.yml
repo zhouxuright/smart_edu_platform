@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: 安装依赖
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+      # 只跑构建，不跑 lint：仓库里 eslint 还报 prop-types 等历史问题，
+      # 接上去第一天就是红的，反而没人看。等清完再开。
+      - name: 构建
+        working-directory: frontend
+        run: npm run build
+      - name: 确认产物存在
+        working-directory: frontend
+        run: test -f dist/index.html && test -f dist/sw.js
+
+  backend:
+    runs-on: ubuntu-latest
+    env:
+      # 这些值只用于让 Settings 通过校验和导入模块，不会真的连库：
+      # 建表发生在 lifespan 里，导入阶段不触发。
+      DATABASE_URL: postgresql+asyncpg://ci:ci@127.0.0.1:5432/ci
+      LLM_API_KEY: ci-dummy
+      LLM_API_BASE: https://example.invalid/v1
+      SECRET_KEY: ci-dummy-secret-not-used
+      LLM_DISABLE: "true"
+      EMBEDDING_PROVIDER: auto
+      DATA_DIR: ${{ github.workspace }}/.ci-data
+      DB_ECHO: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: 安装依赖
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      # 导入检查比语法检查有用得多：路由注册、模型导入、Settings 校验
+      # 全在这一步暴露，而这些恰恰是本地改完最容易在别处炸的地方。
+      - name: 导入应用
+        working-directory: backend
+        run: python -c "import edu_app.main; print('app imported ok')"
+      - name: 确认路由数量
+        working-directory: backend
+        run: |
+          python - <<'PY'
+          from edu_app.main import app
+
+          # 不能用 app.routes：新版本 FastAPI 把 include_router 的结果包成
+          # _IncludedRouter，那些对象没有 .path，枚举出来只有 6 条。
+          # openapi() 会把子路由全部展开。
+          paths = list(app.openapi().get("paths", {}))
+          print(f"{len(paths)} routes")
+          assert len(paths) > 60, f"路由数量异常：{len(paths)}"
+          for required in ("/api/agent/chat", "/api/resumes", "/api/login"):
+              assert required in paths, f"{required} 没挂上"
+          PY
