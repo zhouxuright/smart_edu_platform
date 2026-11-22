@@ -1,0 +1,206 @@
+/* 启程 AI 小程序全局样式：与 Web 端同一套浅蓝配色 */
+
+page {
+  --bg: #e8f2ff;
+  --surface: #ffffff;
+  --line: #cbdcf2;
+  --line-soft: #e4eefb;
+  --ink: #12294d;
+  --muted: #4c6285;
+  --accent: #4a6cf7;
+  --accent-deep: #3856cf;
+
+  background: var(--bg);
+  color: var(--ink);
+  font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 28rpx;
+  line-height: 1.6;
+}
+
+.page {
+  padding: 24rpx 24rpx 40rpx;
+  box-sizing: border-box;
+}
+
+/* 卡片 */
+.card {
+  background: var(--surface);
+  border: 1rpx solid var(--line-soft);
+  border-radius: 24rpx;
+  padding: 28rpx;
+  margin-bottom: 24rpx;
+  box-shadow: 0 8rpx 28rpx rgba(30, 68, 140, 0.07);
+}
+
+.card-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18rpx;
+  font-size: 30rpx;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.card-title .sub {
+  font-size: 24rpx;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+/* 文本 */
+.muted {
+  color: var(--muted);
+  font-size: 24rpx;
+}
+
+.title-lg {
+  font-size: 44rpx;
+  font-weight: 800;
+  letter-spacing: -0.5rpx;
+  line-height: 1.3;
+}
+
+.section-h {
+  margin: 28rpx 0 12rpx;
+  font-size: 26rpx;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+/* 按钮 */
+.btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 88rpx;
+  border-radius: 44rpx;
+  background: var(--accent);
+  color: #fff;
+  font-size: 30rpx;
+  font-weight: 600;
+  border: none;
+}
+
+.btn::after {
+  border: none;
+}
+
+.btn.ghost {
+  background: #fff;
+  color: var(--accent);
+  border: 1rpx solid var(--line);
+}
+
+.btn[disabled] {
+  opacity: 0.55;
+}
+
+.btn-row {
+  display: flex;
+  gap: 20rpx;
+  margin-top: 24rpx;
+}
+
+.btn-row .btn {
+  flex: 1;
+}
+
+/* 输入 */
+.field {
+  margin-bottom: 22rpx;
+}
+
+.field-label {
+  display: block;
+  margin-bottom: 10rpx;
+  font-size: 24rpx;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.input,
+.textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 22rpx 24rpx;
+  border: 1rpx solid var(--line);
+  border-radius: 16rpx;
+  background: #f8fbff;
+  font-size: 28rpx;
+  color: var(--ink);
+}
+
+.textarea {
+  min-height: 180rpx;
+}
+
+/* 统计块 */
+.stat-row {
+  display: flex;
+  gap: 18rpx;
+}
+
+.stat {
+  flex: 1;
+  padding: 22rpx 18rpx;
+  border-radius: 20rpx;
+  background: #f4f9ff;
+  border: 1rpx solid var(--line-soft);
+}
+
+.stat .num {
+  font-size: 40rpx;
+  font-weight: 800;
+  color: var(--accent-deep);
+  line-height: 1.2;
+}
+
+.stat .lab {
+  margin-top: 4rpx;
+  font-size: 22rpx;
+  color: var(--muted);
+}
+
+/* 标签 */
+.tag {
+  display: inline-block;
+  padding: 4rpx 16rpx;
+  border-radius: 999rpx;
+  font-size: 22rpx;
+  font-weight: 600;
+}
+
+.tag-blue { background: #e6efff; color: var(--accent-deep); }
+.tag-green { background: #e3f6e9; color: #1f7a45; }
+.tag-amber { background: #fff2dd; color: #9a5b00; }
+.tag-gray { background: #eef2f8; color: #5a6b80; }
+.tag-red { background: #ffe8ec; color: #a3283f; }
+
+/* 进度条 */
+.progress {
+  height: 12rpx;
+  border-radius: 999rpx;
+  background: #e4eefb;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 999rpx;
+  background: var(--accent);
+}
+
+/* 空状态 */
+.empty {
+  padding: 60rpx 20rpx;
+  text-align: center;
+  color: var(--muted);
+  font-size: 26rpx;
+}
+
+.empty .empty-emoji {
+  display: block;
+  margin-bottom: 12rpx;
+  font-size: 56rpx;
+}

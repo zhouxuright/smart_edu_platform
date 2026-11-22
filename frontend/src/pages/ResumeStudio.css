@@ -1,0 +1,218 @@
+.resume-studio {
+  padding: 4px 2px 32px;
+}
+
+.resume-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.resume-head-main h1 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 21px;
+  color: var(--plan-ink);
+}
+
+.resume-head-main p {
+  margin: 5px 0 0;
+  color: var(--plan-muted);
+  font-size: 13px;
+}
+
+.resume-body {
+  align-items: flex-start;
+}
+
+.resume-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.resume-meta-card,
+.resume-section {
+  border-radius: 14px;
+  border-color: var(--plan-line);
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.resume-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+  color: var(--plan-ink);
+}
+
+.resume-label {
+  display: block;
+  margin: 2px 0 4px;
+  color: var(--plan-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* 每条经历：用左侧竖线表示「这是一个整体」，比纯间距更清楚 */
+.resume-entry {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-left: 3px solid rgba(74, 108, 247, 0.35);
+  border-radius: 0 10px 10px 0;
+  background: rgba(232, 242, 255, 0.55);
+}
+
+.resume-entry:last-child {
+  margin-bottom: 0;
+}
+
+.resume-entry .ant-col {
+  margin-bottom: 8px;
+}
+
+.resume-entry-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  color: var(--plan-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.resume-bullet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  color: var(--plan-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.resume-danger {
+  padding: 4px 0 8px;
+}
+
+/* ---------- 右侧预览 ---------- */
+.resume-preview-wrap {
+  position: sticky;
+  top: 12px;
+  padding: 12px;
+  border: 1px solid var(--plan-line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.resume-preview-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  color: var(--plan-ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.resume-score {
+  color: var(--plan-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: help;
+}
+
+/* A4 比例纸张：210:297 */
+.resume-paper {
+  margin-top: 10px;
+  padding: 26px 28px;
+  aspect-ratio: 210 / 297;
+  overflow-y: auto;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 6px 22px rgba(30, 68, 140, 0.12);
+  color: #1b2430;
+  font-size: 12px;
+  line-height: 1.62;
+}
+
+.resume-paper h2 {
+  margin: 0 0 3px;
+  font-size: 21px;
+  line-height: 1.25;
+}
+
+.resume-paper h3 {
+  margin: 14px 0 5px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid #c9d4e4;
+  color: #2b4bd0;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.resume-paper p {
+  margin: 0 0 6px;
+}
+
+.resume-paper-contact {
+  color: #5a6b80;
+  font-size: 10.5px;
+}
+
+.resume-paper-summary {
+  margin-top: 7px;
+  text-align: justify;
+}
+
+.resume-paper-entry {
+  margin-bottom: 8px;
+}
+
+.resume-paper-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.resume-paper-row strong {
+  font-size: 12px;
+}
+
+.resume-paper-row span {
+  flex: none;
+  color: #5a6b80;
+  font-size: 10.5px;
+}
+
+.resume-paper-meta {
+  color: #5a6b80;
+  font-size: 10.5px;
+}
+
+.resume-paper ul {
+  margin: 3px 0 0;
+  padding-left: 16px;
+}
+
+.resume-paper li {
+  margin: 2px 0;
+}
+
+@media (max-width: 991px) {
+  .resume-preview-wrap {
+    position: static;
+    margin-top: 14px;
+  }
+
+  .resume-paper {
+    aspect-ratio: auto;
+    max-height: 520px;
+  }
+}

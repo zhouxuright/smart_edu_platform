@@ -1,0 +1,60 @@
+.progress-tip {
+  margin-top: 10rpx;
+}
+
+.picker {
+  display: flex;
+  align-items: center;
+  min-height: 84rpx;
+}
+
+.form-tip {
+  margin-top: 16rpx;
+  line-height: 1.6;
+}
+
+.task {
+  padding: 24rpx;
+}
+
+.task-done {
+  background: #f7faf7;
+}
+
+.task-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10rpx;
+}
+
+.task-day {
+  font-size: 22rpx;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.task-title {
+  font-size: 30rpx;
+  font-weight: 700;
+  margin-bottom: 8rpx;
+}
+
+.task-done .task-title {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.task-action {
+  font-size: 26rpx;
+  color: var(--ink);
+  line-height: 1.65;
+}
+
+.task-deliverable {
+  margin-top: 12rpx;
+  padding-top: 12rpx;
+  border-top: 1rpx dashed var(--line);
+  font-size: 24rpx;
+  color: var(--muted);
+}

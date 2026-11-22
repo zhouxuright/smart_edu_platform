@@ -1,0 +1,40 @@
+<view class="mentor">
+  <view class="mode-bar">
+    <view class="mode {{mode === 'career' ? 'on' : ''}}" data-mode="career" bindtap="switchMode">生涯 / 求职</view>
+    <view class="mode {{mode === 'study' ? 'on' : ''}}" data-mode="study" bindtap="switchMode">学习方法</view>
+  </view>
+  <view class="quota muted" wx:if="{{quotaText}}">{{quotaText}}</view>
+
+  <scroll-view class="chat" scroll-y scroll-into-view="{{scrollTarget}}" scroll-with-animation>
+    <view class="chat-empty" wx:if="{{!messages.length}}">
+      <view class="chat-empty-emoji">✨</view>
+      <view class="chat-empty-title">从一个具体问题开始</view>
+      <view class="muted">可以说说你的年级、想投的方向，以及现在最卡住的地方。</view>
+    </view>
+
+    <view class="msg {{item.role}}" wx:for="{{messages}}" wx:key="index" id="msg-{{index}}">
+      <view class="msg-label">{{item.role === 'user' ? '你' : (item.fallback ? 'AI 导师 · 本地示例' : 'AI 导师')}}</view>
+      <view class="bubble"><text class="bubble-text">{{item.content}}</text></view>
+    </view>
+
+    <view class="msg assistant" wx:if="{{loading}}">
+      <view class="msg-label">AI 导师</view>
+      <view class="bubble typing">正在思考…</view>
+    </view>
+    <view class="chat-bottom"></view>
+  </scroll-view>
+
+  <view class="composer">
+    <textarea
+      class="composer-input"
+      value="{{input}}"
+      placeholder="写下你的问题…"
+      maxlength="500"
+      auto-height
+      bindinput="onInput"
+      confirm-type="send"
+      bindconfirm="send"
+    />
+    <button class="send-btn" disabled="{{loading || !input}}" bindtap="send">发送</button>
+  </view>
+</view>

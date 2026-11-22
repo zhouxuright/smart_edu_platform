@@ -1,0 +1,150 @@
+.mentor {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  box-sizing: border-box;
+  padding: 20rpx 24rpx calc(20rpx + env(safe-area-inset-bottom));
+}
+
+.mode-bar {
+  display: flex;
+  gap: 12rpx;
+  margin-bottom: 10rpx;
+}
+
+.mode {
+  padding: 12rpx 26rpx;
+  border-radius: 999rpx;
+  background: #fff;
+  border: 1rpx solid var(--line);
+  font-size: 24rpx;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.mode.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.quota {
+  margin-bottom: 12rpx;
+  font-size: 22rpx;
+}
+
+.chat {
+  flex: 1;
+  min-height: 0;
+  padding: 8rpx 0;
+}
+
+.chat-empty {
+  padding: 100rpx 30rpx;
+  text-align: center;
+}
+
+.chat-empty-emoji {
+  font-size: 60rpx;
+  margin-bottom: 14rpx;
+}
+
+.chat-empty-title {
+  font-size: 30rpx;
+  font-weight: 700;
+  margin-bottom: 8rpx;
+}
+
+.msg {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 22rpx;
+  align-items: flex-start;
+}
+
+.msg.user {
+  align-items: flex-end;
+}
+
+.msg-label {
+  margin-bottom: 6rpx;
+  font-size: 22rpx;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.bubble {
+  max-width: 86%;
+  padding: 20rpx 24rpx;
+  border-radius: 20rpx;
+  background: #fff;
+  border: 1rpx solid var(--line-soft);
+  box-shadow: 0 6rpx 18rpx rgba(30, 68, 140, 0.06);
+}
+
+.msg.user .bubble {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.msg.user .bubble-text {
+  color: #fff;
+}
+
+.bubble-text {
+  font-size: 28rpx;
+  line-height: 1.72;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.typing {
+  color: var(--muted);
+  font-size: 26rpx;
+}
+
+.chat-bottom {
+  height: 8rpx;
+}
+
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 16rpx;
+  padding-top: 16rpx;
+  border-top: 1rpx solid var(--line);
+}
+
+.composer-input {
+  flex: 1;
+  min-height: 76rpx;
+  max-height: 220rpx;
+  padding: 18rpx 22rpx;
+  border: 1rpx solid var(--line);
+  border-radius: 20rpx;
+  background: #fff;
+  font-size: 28rpx;
+  line-height: 1.5;
+  box-sizing: border-box;
+}
+
+.send-btn {
+  flex: none;
+  width: 140rpx;
+  height: 76rpx;
+  line-height: 76rpx;
+  padding: 0;
+  border-radius: 999rpx;
+  background: var(--accent);
+  color: #fff;
+  font-size: 28rpx;
+  font-weight: 600;
+}
+
+.send-btn::after {
+  border: none;
+}
+
+.send-btn[disabled] {
+  opacity: 0.5;
+}

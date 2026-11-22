@@ -1,0 +1,128 @@
+<view class="page">
+  <scroll-view class="switch-bar" scroll-x wx:if="{{list.length > 1}}">
+    <view
+      class="switch-item {{item.id === currentId ? 'on' : ''}}"
+      wx:for="{{list}}"
+      wx:key="id"
+      data-id="{{item.id}}"
+      bindtap="onSwitch"
+    >{{item.title}}</view>
+  </scroll-view>
+
+  <view class="card">
+    <view class="card-title">
+      <text>完整度 {{completeness}}%</text>
+      <text class="sub" wx:if="{{dirty}}">未保存</text>
+    </view>
+    <view class="progress">
+      <view class="progress-fill" style="width: {{completeness}}%"></view>
+    </view>
+  </view>
+
+  <view class="card">
+    <view class="card-title">基本信息</view>
+    <view class="field">
+      <text class="field-label">简历名称</text>
+      <input class="input" value="{{title}}" bindinput="onTitle" />
+    </view>
+    <view class="field">
+      <text class="field-label">目标岗位</text>
+      <input class="input" placeholder="例如：产品实习生" value="{{targetRole}}" bindinput="onRole" />
+    </view>
+    <view class="field">
+      <text class="field-label">姓名</text>
+      <input class="input" value="{{basics.name}}" data-field="name" bindinput="onField" />
+    </view>
+    <view class="field">
+      <text class="field-label">手机</text>
+      <input class="input" type="number" value="{{basics.phone}}" data-field="phone" bindinput="onField" />
+    </view>
+    <view class="field">
+      <text class="field-label">邮箱</text>
+      <input class="input" value="{{basics.email}}" data-field="email" bindinput="onField" />
+    </view>
+    <view class="field">
+      <text class="field-label">城市</text>
+      <input class="input" value="{{basics.city}}" data-field="city" bindinput="onField" />
+    </view>
+    <view class="field">
+      <text class="field-label">作品集 / GitHub</text>
+      <input class="input" value="{{basics.github}}" data-field="github" bindinput="onField" />
+    </view>
+    <view class="field">
+      <text class="field-label">一句话自我介绍</text>
+      <textarea class="textarea" value="{{basics.summary}}" data-field="summary" bindinput="onField" />
+    </view>
+    <view class="field">
+      <text class="field-label">技能（用顿号或逗号分隔）</text>
+      <input class="input" placeholder="SQL、Excel、Axure" value="{{skillsText}}" bindinput="onSkills" />
+    </view>
+    <button class="btn" loading="{{saving}}" disabled="{{saving}}" bindtap="save">保存</button>
+  </view>
+
+  <view class="card">
+    <view class="card-title">
+      <text>附件简历</text>
+      <text class="sub">{{attachments.length}}/{{attachLimit}}</text>
+    </view>
+    <view class="muted">把已有的 PDF / Word 传上来，可预览文字、下载原件，也能让 AI 解析成结构化内容。</view>
+    <button
+      class="btn ghost attach-upload"
+      loading="{{uploading}}"
+      disabled="{{uploading}}"
+      bindtap="chooseAndUpload"
+    >{{uploading ? uploadText : '选择文件上传（可多选）'}}</button>
+
+    <view class="attach-empty" wx:if="{{!attachments.length}}">还没有附件</view>
+
+    <view class="attach-item" wx:for="{{attachments}}" wx:key="id">
+      <view class="attach-main">
+        <view class="attach-name">{{item.filename}}</view>
+        <view class="attach-meta">
+          <text>{{item.metaText}}</text>
+          <text class="tag tag-amber attach-flag" wx:if="{{item.parse_error}}">无法解析</text>
+        </view>
+      </view>
+      <view class="attach-acts">
+        <text class="act" data-id="{{item.id}}" bindtap="onPreview">预览</text>
+        <text class="act" data-id="{{item.id}}" bindtap="onDownload">下载</text>
+        <text class="act" data-id="{{item.id}}" bindtap="onImport">{{importId === item.id ? '解析中' : '导入'}}</text>
+        <text class="act danger" data-id="{{item.id}}" bindtap="onDelete">删除</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="card">
+    <view class="card-title">其他板块</view>
+    <view class="count-row">
+      <view class="count-item">
+        <view class="num">{{counts.education}}</view>
+        <view class="lab">教育经历</view>
+      </view>
+      <view class="count-item">
+        <view class="num">{{counts.experience}}</view>
+        <view class="lab">实习经历</view>
+      </view>
+      <view class="count-item">
+        <view class="num">{{counts.projects}}</view>
+        <view class="lab">项目经历</view>
+      </view>
+    </view>
+    <view class="muted hint">教育、实习、项目的逐条编辑请到网页端「简历工作台」，那里有实时预览和 AI 润色。</view>
+  </view>
+
+  <button class="btn ghost" loading="{{exporting}}" bindtap="exportPdf">导出 PDF</button>
+
+  <view class="sheet-mask" wx:if="{{preview.open}}" bindtap="closePreview">
+    <view class="sheet" catchtap="noop">
+      <view class="sheet-head">
+        <text class="sheet-title">{{preview.title}}</text>
+        <text class="sheet-close" bindtap="closePreview">关闭</text>
+      </view>
+      <scroll-view scroll-y class="sheet-body">
+        <text class="sheet-text" wx:if="{{!preview.loading}}">{{preview.text}}</text>
+        <text class="sheet-text muted" wx:else>读取中…</text>
+      </scroll-view>
+    </view>
+  </view>
+</view>

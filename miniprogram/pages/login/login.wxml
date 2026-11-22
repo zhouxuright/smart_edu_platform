@@ -1,0 +1,35 @@
+<view class="login-page">
+  <view class="login-head">
+    <view class="brand-mark">启</view>
+    <view class="title-lg">启程 AI</view>
+    <view class="muted">从考研、实习和求职困惑出发，找到下一步能做的事。</view>
+  </view>
+
+  <view class="card">
+    <view class="field">
+      <text class="field-label">邮箱</text>
+      <input
+        class="input"
+        type="text"
+        placeholder="you@example.com"
+        value="{{email}}"
+        bindinput="onEmailInput"
+      />
+    </view>
+    <view class="field">
+      <text class="field-label">密码</text>
+      <input
+        class="input"
+        password
+        placeholder="请输入密码"
+        value="{{password}}"
+        bindinput="onPasswordInput"
+        bindconfirm="submit"
+      />
+    </view>
+    <button class="btn" loading="{{loading}}" disabled="{{loading}}" bindtap="submit">
+      登录
+    </button>
+    <view class="login-tip muted">还没有账号？请在网页端注册后再回到小程序登录。</view>
+  </view>
+</view>

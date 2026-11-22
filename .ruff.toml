@@ -1,0 +1,7 @@
+exclude = [
+  "backend/test_openai.py",
+  "backend/test_openai_simple.py",
+  "backend/verify_openai.py",
+]
+
+line-length = 120

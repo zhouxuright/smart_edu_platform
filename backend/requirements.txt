@@ -1,0 +1,30 @@
+# 运行时依赖（镜像必装）。
+# BGE-M3 本地推理要 torch + sentence-transformers（约 2GB），单独放在
+# requirements-embedding.txt，由部署环境决定装不装。
+fastapi
+uvicorn[standard]
+sqlalchemy
+asyncpg
+aiosqlite
+psycopg2-binary
+pydantic[email]
+pydantic-settings
+python-dotenv
+langchain-core
+langchain-openai
+langchain-community
+httpx
+alembic
+passlib[argon2]
+python-jose[cryptography]
+python-multipart
+faiss-cpu
+jieba
+openpyxl
+pypdf
+prometheus-fastapi-instrumentator
+pymilvus
+# 以下三个此前漏登记：本机能跑是因为环境里早就装过，换台机器构建镜像会直接崩
+numpy
+reportlab          # 简历导出 PDF
+python-docx        # 解析 .docx 附件

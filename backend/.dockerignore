@@ -1,0 +1,15 @@
+# 构建上下文里不要的东西：密钥、运行期数据、本地产物
+.env
+.env.*
+*.db
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+uploads/
+storage/
+.cache/
+mp_tok.txt
+*.log
+.pytest_cache/
+.git/

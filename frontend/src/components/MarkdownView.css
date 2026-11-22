@@ -1,0 +1,207 @@
+/* Markdown 渲染样式：统一浅蓝主题，保证任何页面嵌入都不跑版 */
+
+.md-body {
+  color: var(--plan-ink);
+  font-size: 14.5px;
+  line-height: 1.78;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.md-body > *:first-child {
+  margin-top: 0;
+}
+
+.md-body > *:last-child {
+  margin-bottom: 0;
+}
+
+/* 标题：比正文略大但不喧宾夺主 */
+.md-body h1,
+.md-body h2,
+.md-body h3,
+.md-body h4,
+.md-body h5,
+.md-body h6 {
+  margin: 18px 0 8px;
+  font-weight: 700;
+  line-height: 1.42;
+  color: var(--plan-ink);
+}
+
+.md-body h1 {
+  font-size: 1.32em;
+}
+
+.md-body h2 {
+  font-size: 1.2em;
+}
+
+.md-body h3 {
+  font-size: 1.08em;
+}
+
+.md-body h4,
+.md-body h5,
+.md-body h6 {
+  font-size: 1em;
+  color: var(--plan-muted);
+}
+
+/* 段落与行内元素 */
+.md-body p {
+  margin: 0 0 10px;
+}
+
+.md-body strong {
+  font-weight: 700;
+  color: var(--plan-accent-deep);
+}
+
+.md-body em {
+  font-style: italic;
+  color: var(--plan-muted);
+}
+
+.md-body del {
+  color: var(--plan-muted);
+}
+
+.md-body a {
+  color: var(--plan-accent);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(74, 108, 247, 0.35);
+}
+
+.md-body a:hover {
+  color: var(--plan-accent-deep);
+  border-bottom-color: var(--plan-accent-deep);
+}
+
+/* 列表：缩进用 padding 而非默认 margin，避免窄屏溢出 */
+.md-body ul,
+.md-body ol {
+  margin: 6px 0 12px;
+  padding-left: 22px;
+}
+
+.md-body li {
+  margin: 4px 0;
+}
+
+.md-body li > ul,
+.md-body li > ol {
+  margin: 4px 0 4px;
+}
+
+.md-body li::marker {
+  color: var(--plan-accent);
+}
+
+/* 分隔线 */
+.md-body hr {
+  height: 0;
+  margin: 16px 0;
+  border: 0;
+  border-top: 1px solid var(--plan-line);
+}
+
+/* 引用 */
+.md-body blockquote {
+  margin: 10px 0;
+  padding: 6px 12px;
+  border-left: 3px solid var(--plan-accent);
+  background: rgba(74, 108, 247, 0.06);
+  border-radius: 0 8px 8px 0;
+  color: var(--plan-muted);
+}
+
+.md-body blockquote > *:last-child {
+  margin-bottom: 0;
+}
+
+/* 代码 */
+.md-body code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: rgba(74, 108, 247, 0.1);
+  color: var(--plan-accent-deep);
+  font-size: 0.92em;
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
+}
+
+.md-body pre {
+  margin: 10px 0;
+  padding: 12px 14px;
+  overflow-x: auto;
+  border: 1px solid var(--plan-line);
+  border-radius: 10px;
+  background: #f6faff;
+  line-height: 1.6;
+}
+
+.md-body pre code {
+  padding: 0;
+  background: none;
+  color: var(--plan-ink);
+  font-size: 0.9em;
+}
+
+/* 表格（remark-gfm） */
+.md-table-wrap {
+  margin: 10px 0;
+  overflow-x: auto;
+  border: 1px solid var(--plan-line);
+  border-radius: 10px;
+}
+
+.md-body table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+
+.md-body th,
+.md-body td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--plan-line-soft);
+  text-align: left;
+  vertical-align: top;
+}
+
+.md-body th {
+  background: rgba(74, 108, 247, 0.08);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.md-body tr:last-child td {
+  border-bottom: 0;
+}
+
+/* 任务列表（- [ ] / - [x]） */
+.md-body input[type='checkbox'] {
+  margin-right: 6px;
+  accent-color: var(--plan-accent);
+}
+
+/* 图片不撑破容器 */
+.md-body img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+}
+
+/* 窄屏收紧留白 */
+@media (max-width: 640px) {
+  .md-body {
+    font-size: 14px;
+    line-height: 1.72;
+  }
+
+  .md-body h1,
+  .md-body h2,
+  .md-body h3 {
+    margin-top: 14px;
+  }
+}

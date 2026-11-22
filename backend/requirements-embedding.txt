@@ -1,0 +1,10 @@
+# 可选：本地向量模型（BGE-M3）。
+#
+# 装上之后 EMBEDDING_PROVIDER=local 才有意义，RAG / 知识图谱走向量检索；
+# 不装的话 resolve_provider() 会退回哈希词袋，链路不断但**没有语义能力**，
+# 检索结果只是词汇重叠。要么装，要么明确告诉用户这块是降级的。
+#
+# 体积参考：torch(CPU) ~200MB 轮子 + 依赖 ~800MB 安装后，bge-m3 权重 ~2.2GB。
+# 内存：加载后常驻约 1.5-2GB。512MB 的免费实例装不下，别硬试。
+torch --index-url https://download.pytorch.org/whl/cpu
+sentence-transformers

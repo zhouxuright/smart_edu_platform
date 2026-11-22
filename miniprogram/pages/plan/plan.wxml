@@ -1,0 +1,61 @@
+<view class="page">
+  <view class="card" wx:if="{{plan}}">
+    <view class="card-title">
+      <text>{{plan.target_role}}</text>
+      <text class="sub">{{plan.stage}} · 每周 {{plan.weekly_hours}}h</text>
+    </view>
+    <view class="progress">
+      <view class="progress-fill" style="width: {{percent}}%"></view>
+    </view>
+    <view class="muted progress-tip">{{plan.completed_count}}/{{plan.tasks.length}} 已完成</view>
+  </view>
+
+  <view class="card" wx:if="{{showForm}}">
+    <view class="card-title">{{plan ? '重新生成计划' : '生成 7 天计划'}}</view>
+    <view class="field">
+      <text class="field-label">目标岗位</text>
+      <input class="input" placeholder="例如：产品实习生" value="{{targetRole}}" bindinput="onRoleInput" />
+    </view>
+    <view class="field">
+      <text class="field-label">当前阶段</text>
+      <picker mode="selector" range="{{stages}}" value="{{stageIndex}}" bindchange="onStageChange">
+        <view class="input picker">{{stages[stageIndex]}}</view>
+      </picker>
+    </view>
+    <view class="field">
+      <text class="field-label">每周可投入小时数：{{weeklyHours}} 小时</text>
+      <slider min="2" max="20" value="{{weeklyHours}}" show-value activeColor="#4a6cf7" bindchange="onHoursChange" />
+    </view>
+    <button class="btn" loading="{{generating}}" disabled="{{generating}}" bindtap="generate">
+      {{plan ? '覆盖并重新生成' : '开始生成'}}
+    </button>
+    <view class="muted form-tip">计划会按天拆成可执行动作，并给出当天可检查的交付物。</view>
+  </view>
+
+  <block wx:if="{{plan}}">
+    <view class="section-h">每天一件事</view>
+    <view
+      class="card task {{item.completed ? 'task-done' : ''}}"
+      wx:for="{{plan.tasks}}"
+      wx:key="id"
+      data-id="{{item.id}}"
+      data-completed="{{item.completed}}"
+      bindtap="toggleTask"
+    >
+      <view class="task-head">
+        <view class="task-day">第 {{item.day_index}} 天</view>
+        <view class="tag {{item.completed ? 'tag-green' : 'tag-blue'}}">{{item.completed ? '已完成' : item.estimated_minutes + ' 分钟'}}</view>
+      </view>
+      <view class="task-title">{{item.title}}</view>
+      <view class="task-action">{{item.action}}</view>
+      <view class="task-deliverable">交付物：{{item.deliverable}}</view>
+    </view>
+
+    <button class="btn ghost" bindtap="toggleForm">换一份计划</button>
+  </block>
+
+  <view class="empty" wx:if="{{!loading && !plan && !showForm}}">
+    <text class="empty-emoji">🗓️</text>
+    还没有计划，先填写上面的表单生成一份。
+  </view>
+</view>

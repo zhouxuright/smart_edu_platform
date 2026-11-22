@@ -1,0 +1,91 @@
+<view class="page">
+  <view class="hero card">
+    <view class="title-lg">欢迎回来，{{name}}</view>
+    <view class="muted">今天先做一件能推进的小事就够了。</view>
+  </view>
+
+  <view class="stat-row">
+    <view class="stat">
+      <view class="num">{{stats.courses}}</view>
+      <view class="lab">在学课程</view>
+    </view>
+    <view class="stat">
+      <view class="num">{{stats.studyHours}}</view>
+      <view class="lab">学习时长</view>
+    </view>
+    <view class="stat">
+      <view class="num">{{stats.achievements}}</view>
+      <view class="lab">获得成就</view>
+    </view>
+  </view>
+
+  <view class="card" wx:if="{{plan}}">
+    <view class="card-title">
+      <text>我的 7 天计划</text>
+      <text class="sub">{{plan.completed_count}}/{{plan.tasks.length}} 已完成</text>
+    </view>
+    <view class="progress">
+      <view class="progress-fill" style="width: {{planPercent}}%"></view>
+    </view>
+    <view class="next-task" wx:if="{{plan.next_task}}">
+      <view class="next-label">今天这一步</view>
+      <view class="next-title">{{plan.next_task.title}}</view>
+      <view class="muted">{{plan.next_task.action}}</view>
+    </view>
+    <view class="next-task" wx:else>
+      <view class="next-title">这份计划已经全部完成 🎉</view>
+      <view class="muted">可以回计划页生成新的一份。</view>
+    </view>
+    <button class="btn ghost" bindtap="goPlan">查看完整计划</button>
+  </view>
+
+  <view class="card" wx:else>
+    <view class="card-title">还没有计划</view>
+    <view class="muted">选一个想投的实习方向，系统会给出一周里每天能做完的一件事。</view>
+    <button class="btn" bindtap="goPlan">生成我的 7 天计划</button>
+  </view>
+
+  <view class="card">
+    <view class="card-title">
+      <text>投递进展</text>
+      <text class="sub" bindtap="goApplications">看板 ›</text>
+    </view>
+    <view class="stat-row">
+      <view class="stat">
+        <view class="num">{{funnel.submitted}}</view>
+        <view class="lab">已投递</view>
+      </view>
+      <view class="stat">
+        <view class="num">{{funnel.interview}}</view>
+        <view class="lab">进面试</view>
+      </view>
+      <view class="stat">
+        <view class="num">{{funnel.offer}}</view>
+        <view class="lab">拿 offer</view>
+      </view>
+    </view>
+  </view>
+
+  <view class="card" wx:if="{{recommendations.length}}">
+    <view class="card-title">下一步可以试试</view>
+    <view class="rec" wx:for="{{recommendations}}" wx:key="*this">
+      <text class="rec-dot">•</text>
+      <text class="rec-text">{{item}}</text>
+    </view>
+  </view>
+
+  <view class="quick">
+    <view class="quick-item" bindtap="goMentor">
+      <view class="quick-emoji">💬</view>
+      <view>问导师</view>
+    </view>
+    <view class="quick-item" bindtap="goResume">
+      <view class="quick-emoji">📄</view>
+      <view>改简历</view>
+    </view>
+    <view class="quick-item" bindtap="goApplications">
+      <view class="quick-emoji">📮</view>
+      <view>记投递</view>
+    </view>
+  </view>
+</view>

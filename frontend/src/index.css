@@ -1,0 +1,317 @@
+:root {
+  /* 与 src/theme.js 的 palette 保持同值，改色时两处一起改 */
+  --plan-bg: #e8f2ff;
+  --plan-surface: #f1f8ff;
+  --plan-line: #cbdcf2;
+  --plan-line-soft: #dce8f8;
+  --plan-ink: #12294d;
+  --plan-muted: #4c6285;
+  --plan-accent: #4a6cf7;
+  --plan-accent-deep: #3856cf;
+
+  /* 兼容旧命名，避免历史页面引用失效 */
+  --tech-blue: #4a6cf7;
+  --tech-purple: #7a5af8;
+  --glass-bg: rgba(255, 255, 255, 0.72);
+  --glass-border: rgba(203, 220, 242, 0.9);
+  --text-primary: #12294d;
+  --text-secondary: #4c6285;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, -apple-system,
+    'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans',
+    'Droid Sans', 'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: radial-gradient(ellipse at 8% 0%, #d8e9ff, transparent 46%),
+    radial-gradient(ellipse at 96% 12%, #e4ecff, transparent 40%),
+    var(--plan-bg);
+  min-height: 100vh;
+  color: var(--plan-ink);
+  background-attachment: fixed;
+  color-scheme: light;
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+/* Glassmorphism Utilities（浅色玻璃） */
+.glass-card {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  box-shadow: 0 8px 28px rgba(30, 68, 140, 0.08);
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(203, 220, 242, 0.35);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(122, 152, 196, 0.5);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(122, 152, 196, 0.75);
+}
+
+/* Ant Design Overrides for the light-blue glass theme */
+.ant-layout {
+  background: transparent !important;
+}
+
+.ant-layout-sider {
+  background: rgba(255, 255, 255, 0.66) !important;
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  border-right: 1px solid var(--glass-border);
+}
+
+.ant-menu {
+  background: transparent !important;
+  border-right: none !important;
+}
+
+.ant-menu-item-selected {
+  font-weight: 600;
+}
+
+/* Sider 折叠按钮默认是深色底，浅色主题下必须覆盖，否则左下角会出现一块突兀的黑条 */
+.ant-layout-sider-trigger {
+  background: rgba(216, 233, 255, 0.85) !important;
+  color: var(--plan-muted) !important;
+  border-top: 1px solid var(--glass-border);
+}
+
+.ant-layout-sider-trigger:hover {
+  background: rgba(203, 220, 242, 0.95) !important;
+  color: var(--plan-ink) !important;
+}
+
+.ant-card {
+  background: var(--glass-bg) !important;
+  border: 1px solid var(--glass-border) !important;
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 6px 20px rgba(30, 68, 140, 0.06);
+}
+
+.ant-card-head {
+  border-bottom: 1px solid var(--glass-border) !important;
+}
+
+/* 浅色下正文用次级色，标题仍走主题色，避免整页发灰 */
+.ant-card-body {
+  color: var(--plan-muted);
+}
+
+.ant-card-head-title,
+.ant-typography h1,
+.ant-typography h2,
+.ant-typography h3,
+.ant-typography h4,
+h1.ant-typography,
+h2.ant-typography,
+h3.ant-typography,
+h4.ant-typography {
+  color: var(--plan-ink) !important;
+}
+
+.ant-table-wrapper .ant-table {
+  background: transparent;
+}
+
+/* 顶部导航条 */
+.app-header {
+  padding: 0 20px;
+  height: 60px;
+  background: rgba(255, 255, 255, 0.62);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--glass-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.app-header-title {
+  font-weight: 700;
+  color: var(--plan-ink);
+  letter-spacing: -0.01em;
+  /* 窄屏下标题必须单行省略，否则会被挤成竖排 */
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-header-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  color: var(--plan-muted);
+  font-size: 13px;
+}
+
+@media (max-width: 640px) {
+  .app-header {
+    padding: 0 6px;
+    gap: 4px;
+  }
+
+  .app-header-user {
+    gap: 2px;
+  }
+}
+
+/* 移动端底部标签栏 */
+.app-tabbar {
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 30;
+  display: flex;
+  justify-content: space-around;
+  gap: 2px;
+  padding: 6px 6px calc(6px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--glass-border);
+  background: rgba(255, 255, 255, 0.9);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 -4px 18px rgba(30, 68, 140, 0.08);
+}
+
+.app-tab {
+  flex: 1 1 0;
+  display: grid;
+  justify-items: center;
+  gap: 3px;
+  padding: 6px 2px 4px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: var(--plan-muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.app-tab svg {
+  width: 19px;
+  height: 19px;
+}
+
+.app-tab.is-active {
+  color: var(--plan-accent);
+  background: rgba(74, 108, 247, 0.1);
+}
+
+.app-tab:active {
+  background: rgba(74, 108, 247, 0.16);
+}
+
+/* 侧栏品牌区 */
+.app-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 60px;
+  margin: 0 12px;
+  padding: 0 4px;
+  color: var(--plan-ink);
+  font-weight: 800;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.app-brand-mark {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 10px 10px 10px 3px;
+  background: var(--plan-accent);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+/* 空状态引导 */
+.empty-guide {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 44px 20px;
+  text-align: center;
+}
+
+.empty-guide-title {
+  margin: 0;
+  color: var(--plan-ink);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.empty-guide-desc {
+  margin: 0;
+  max-width: 420px;
+  color: var(--plan-muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+@media (max-width: 768px) {
+  .app-header {
+    padding: 0 12px;
+  }
+}
+
+/* 仪表盘三个统计卡：手机上排成一行。
+   两列会把第三张孤零零甩到下一行，且「0.0 小时」会被挤成两行。 */
+@media (max-width: 575px) {
+  .dash-stats .ant-col {
+    flex: 0 0 33.3333%;
+    max-width: 33.3333%;
+  }
+
+  .dash-stats .ant-card-body {
+    padding: 12px 8px;
+  }
+
+  .dash-stats .ant-statistic-title {
+    margin-bottom: 2px;
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .dash-stats .ant-statistic-content {
+    font-size: 18px;
+    white-space: nowrap;
+  }
+
+  .dash-stats .ant-statistic-content-prefix {
+    margin-inline-end: 2px;
+    font-size: 13px;
+  }
+}

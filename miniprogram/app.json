@@ -1,0 +1,58 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/plan/plan",
+    "pages/mentor/mentor",
+    "pages/resume/resume",
+    "pages/applications/applications",
+    "pages/login/login"
+  ],
+  "window": {
+    "backgroundTextStyle": "dark",
+    "backgroundColor": "#e8f2ff",
+    "navigationBarBackgroundColor": "#e8f2ff",
+    "navigationBarTitleText": "启程 AI",
+    "navigationBarTextStyle": "black"
+  },
+  "tabBar": {
+    "color": "#8aa0bf",
+    "selectedColor": "#4a6cf7",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "white",
+    "list": [
+      {
+        "pagePath": "pages/index/index",
+        "text": "首页",
+        "iconPath": "assets/tab/home.png",
+        "selectedIconPath": "assets/tab/home-active.png"
+      },
+      {
+        "pagePath": "pages/plan/plan",
+        "text": "计划",
+        "iconPath": "assets/tab/plan.png",
+        "selectedIconPath": "assets/tab/plan-active.png"
+      },
+      {
+        "pagePath": "pages/mentor/mentor",
+        "text": "导师",
+        "iconPath": "assets/tab/chat.png",
+        "selectedIconPath": "assets/tab/chat-active.png"
+      },
+      {
+        "pagePath": "pages/resume/resume",
+        "text": "简历",
+        "iconPath": "assets/tab/file.png",
+        "selectedIconPath": "assets/tab/file-active.png"
+      },
+      {
+        "pagePath": "pages/applications/applications",
+        "text": "投递",
+        "iconPath": "assets/tab/job.png",
+        "selectedIconPath": "assets/tab/job-active.png"
+      }
+    ]
+  },
+  "sitemapLocation": "sitemap.json",
+  "style": "v2",
+  "lazyCodeLoading": "requiredComponents"
+}

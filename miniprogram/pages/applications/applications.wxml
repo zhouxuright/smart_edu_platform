@@ -1,0 +1,64 @@
+<view class="page">
+  <view class="stat-row" wx:if="{{stats}}">
+    <view class="stat">
+      <view class="num">{{stats.submitted}}</view>
+      <view class="lab">已投递</view>
+    </view>
+    <view class="stat">
+      <view class="num">{{stats.interview_count}}</view>
+      <view class="lab">进面试</view>
+    </view>
+    <view class="stat">
+      <view class="num">{{stats.offer_count}}</view>
+      <view class="lab">拿 offer</view>
+    </view>
+  </view>
+
+  <view class="card">
+    <view class="card-title">
+      <text>投递记录</text>
+      <text class="sub" bindtap="toggleForm">{{showForm ? '收起' : '+ 新增'}}</text>
+    </view>
+
+    <block wx:if="{{showForm}}">
+      <view class="field">
+        <text class="field-label">公司</text>
+        <input class="input" placeholder="例如：某某科技" value="{{company}}" bindinput="onCompany" />
+      </view>
+      <view class="field">
+        <text class="field-label">岗位</text>
+        <input class="input" placeholder="例如：产品实习生" value="{{position}}" bindinput="onPosition" />
+      </view>
+      <view class="field">
+        <text class="field-label">渠道</text>
+        <picker mode="selector" range="{{channels}}" range-key="label" value="{{channelIndex}}" bindchange="onChannel">
+          <view class="input picker">{{channels[channelIndex].label}}</view>
+        </picker>
+      </view>
+      <button class="btn" loading="{{submitting}}" disabled="{{submitting}}" bindtap="create">记录这次投递</button>
+    </block>
+
+    <view class="empty" wx:if="{{!loading && !items.length}}">
+      <text class="empty-emoji">📮</text>
+      还没有投递记录。投一家就记一条，后面才看得清卡在哪一步。
+    </view>
+
+    <view
+      class="app-item"
+      wx:for="{{items}}"
+      wx:key="id"
+      data-id="{{item.id}}"
+      data-status="{{item.status}}"
+      bindtap="changeStatus"
+    >
+      <view class="app-main">
+        <view class="app-company">{{item.company}}</view>
+        <view class="app-position">{{item.position}}</view>
+        <view class="muted" wx:if="{{item.applied_at}}">投递于 {{item.applied_at}}</view>
+      </view>
+      <view class="tag {{item.tagClass}}">{{statusLabel[item.status] || item.status}}</view>
+    </view>
+  </view>
+
+  <view class="muted tip">点任意一条可以更新它的状态。</view>
+</view>
