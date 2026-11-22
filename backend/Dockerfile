@@ -7,6 +7,11 @@ FROM python:3.12-slim
 # 打开后镜像 ~3.5GB，运行时内存需求约 2GB。
 ARG WITH_EMBEDDING=false
 
+# pip 源。国内直连 pypi.org 常被限到 100-200 kB/s，一次构建要半小时以上。
+# 本地构建可以传 --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+# 云平台（Railway / Render / Fly）在海外，用默认源反而更快，所以不写死。
+ARG PIP_INDEX_URL=https://pypi.org/simple
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -22,11 +27,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -i "$PIP_INDEX_URL" -r requirements.txt
 
 COPY requirements-embedding.txt ./
 RUN if [ "$WITH_EMBEDDING" = "true" ]; then \
-        pip install --no-cache-dir -r requirements-embedding.txt && \
+        pip install --no-cache-dir -i "$PIP_INDEX_URL" -r requirements-embedding.txt && \
         python -c "from sentence_transformers import SentenceTransformer; \
 SentenceTransformer('BAAI/bge-m3')" ; \
     fi

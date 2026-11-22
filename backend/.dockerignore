@@ -13,3 +13,6 @@ mp_tok.txt
 *.log
 .pytest_cache/
 .git/
+# FAISS 索引是本地库的产物，chunk id 与线上库对不上，打进镜像会污染检索
+**/faiss.index
+**/faiss_meta.json
