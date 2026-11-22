@@ -3,7 +3,10 @@
 # requirements-embedding.txt，由部署环境决定装不装。
 fastapi
 uvicorn[standard]
-sqlalchemy
+# [asyncio] 不能省：SQLAlchemy 2.0 的 greenlet 是按平台条件安装的，
+# x86_64 Linux（Docker / CI）不在默认列表里，漏了会在 create_async_engine 处
+# 直接 ImportError。本地 Windows 能跑只是因为别的包顺带装了 greenlet。
+sqlalchemy[asyncio]
 asyncpg
 aiosqlite
 psycopg2-binary
