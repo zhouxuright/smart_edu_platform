@@ -41,6 +41,7 @@ PAGE_LABEL = {
     "plan": "我的计划",
     "mistake-book": "错题本",
     "parent": "家长门户",
+    "knowledge": "知识图谱",
     "dashboard": "仪表盘",
     "other": "启程 AI",
 }

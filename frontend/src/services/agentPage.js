@@ -14,6 +14,8 @@ const PAGE_BY_PATH = [
   [/^\/plan\/internship/, 'plan'],
   [/^\/mistake-book/, 'mistake-book'],
   [/^\/parent/, 'parent'],
+  // 只匹配 /knowledge 本身与它的子路径，别把 /knowledge-extraction 也吞进来
+  [/^\/knowledge(?:\/|$)/, 'knowledge'],
   [/^\/dashboard/, 'dashboard'],
 ];
 
@@ -23,6 +25,7 @@ export const PAGE_LABEL = {
   plan: '我的计划',
   'mistake-book': '错题本',
   parent: '家长门户',
+  knowledge: '知识图谱',
   dashboard: '仪表盘',
   other: '启程 AI',
 };

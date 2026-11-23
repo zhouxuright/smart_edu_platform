@@ -229,6 +229,11 @@ async def seed_data():
         else:
             print("All knowledge nodes already exist.")
 
+        # 只灌知识点：线上跑的时候不能顺手建一个 password123 的演示账号
+        if "--nodes-only" in sys.argv:
+            print("--nodes-only：跳过演示账号与学习记录")
+            return
+
         # 2. 创建演示用户
         print("Checking for demo user...")
         demo_email = "student@example.com"

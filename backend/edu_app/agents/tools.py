@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # 状态机与状态文案只有一份实现，Agent 必须复用，不能自己维护一套
 from edu_app.api.applications import STATUS_LABEL, TRANSITIONS
 from edu_app.models.job import JobApplication
-from edu_app.models.learning import LearningRecord, MistakeRecord, StudentProfile
+from edu_app.models.learning import KnowledgeNode, LearningRecord, MistakeRecord, StudentProfile
 from edu_app.models.plan import InternshipPlan, InternshipPlanTask
 from edu_app.models.resume import Resume
 from edu_app.models.user import User
@@ -825,6 +825,119 @@ async def _read_student_summary(db: AsyncSession, user: User, page_id: Any) -> d
     return summary
 
 
+# ------------------------------------------------------------------ 读工具：薄弱点
+
+# 低于这个分数的学习记录算「没掌握」，用来和错题一起判断薄弱点
+LOW_SCORE = 70
+# 一道未掌握的错题折合多少分权重，比一次低分更能说明问题
+MISTAKE_WEIGHT = 2.0
+LOW_SCORE_WEIGHT = 1.5
+
+
+async def _read_weak_points(db: AsyncSession, user: User, page_id: Any) -> dict:
+    """把散在错题本和学习记录里的薄弱点合成一张清单。
+
+    知识点库（KnowledgeNode）是公共数据、没有 user_id，而且线上可能还没灌数据，
+    所以它是**增强项**不是前提：没有节点时照样给出薄弱点，只是少了前置知识链。
+    """
+    mistakes = (
+        await db.execute(
+            select(MistakeRecord).where(
+                MistakeRecord.user_id == user.id,
+                MistakeRecord.is_resolved == 0,
+            )
+        )
+    ).scalars().all()
+
+    low_records = (
+        await db.execute(
+            select(LearningRecord)
+            .where(
+                LearningRecord.user_id == user.id,
+                LearningRecord.score.isnot(None),
+                LearningRecord.score < LOW_SCORE,
+            )
+            .order_by(LearningRecord.timestamp.desc())
+            .limit(30)
+        )
+    ).scalars().all()
+
+    buckets: dict[tuple[str, str], dict] = {}
+    for row in mistakes:
+        key = (row.subject or "未分类", row.topic or "综合")
+        buckets.setdefault(key, {"mistakes": 0, "scores": []})["mistakes"] += 1
+    for row in low_records:
+        key = (row.subject or "未分类", row.topic or "综合")
+        buckets.setdefault(key, {"mistakes": 0, "scores": []})["scores"].append(row.score)
+
+    if not buckets:
+        return {
+            "exists": False,
+            "hint": "还没有未掌握的错题，也没有低于 70 分的学习记录，暂时看不出薄弱点。",
+        }
+
+    subjects = {subject for subject, _ in buckets}
+    nodes = (
+        await db.execute(select(KnowledgeNode).where(KnowledgeNode.subject.in_(subjects)))
+    ).scalars().all()
+
+    def match_node(subject: str, topic: str):
+        exact = next((n for n in nodes if n.subject == subject and n.name == topic), None)
+        if exact:
+            return exact
+        # 主题常常写成「导数的应用」这类，用包含关系兜一下
+        return next(
+            (n for n in nodes if n.subject == subject and (topic in n.name or n.name in topic)),
+            None,
+        )
+
+    points = []
+    for (subject, topic), data in buckets.items():
+        node = match_node(subject, topic)
+        weight = data["mistakes"] * MISTAKE_WEIGHT + len(data["scores"]) * LOW_SCORE_WEIGHT
+
+        reasons = []
+        if data["mistakes"]:
+            reasons.append(f"{data['mistakes']} 道错题未掌握")
+        if data["scores"]:
+            reasons.append(f"{len(data['scores'])} 次低于 {LOW_SCORE} 分（最低 {min(data['scores']):g}）")
+
+        points.append({
+            "subject": subject,
+            "topic": topic,
+            "weight": round(weight, 1),
+            "reason": "，".join(reasons),
+            "prerequisites": list(node.prerequisites or []) if node else None,
+            "description": _clip(node.description, 100) if node else None,
+        })
+
+    # 权重高的排前面：错题比低分更能说明「这块真不会」
+    points.sort(key=lambda item: -item["weight"])
+
+    subject_stats: dict[str, dict] = {}
+    for (subject, _topic), data in buckets.items():
+        stat = subject_stats.setdefault(subject, {"points": 0, "mistakes": 0, "low_scores": 0})
+        stat["points"] += 1
+        stat["mistakes"] += data["mistakes"]
+        stat["low_scores"] += len(data["scores"])
+
+    result = {
+        "exists": True,
+        "weak_points": points[:6],
+        "subject_stats": subject_stats,
+        "criteria": f"未掌握错题每题计 {MISTAKE_WEIGHT} 分，低于 {LOW_SCORE} 分的记录每次计 {LOW_SCORE_WEIGHT} 分",
+    }
+    if not nodes:
+        # 说清楚为什么没有前置知识，避免模型自己编一条学习路径
+        result["knowledge_library"] = {
+            "nodes": 0,
+            "note": "知识点库还没有数据，给不出前置知识链，只能按错题和低分排序",
+        }
+    else:
+        result["knowledge_library"] = {"nodes": len(nodes)}
+    return result
+
+
 # ------------------------------------------------------------------ 注册
 
 register(ToolSpec(
@@ -947,4 +1060,13 @@ register(ToolSpec(
     description="读取当前账号的学情概览：近 30 天学习记录与平均分、错题与待复习数、实习计划进度、投递停滞情况",
     params="无参数",
     reader=_read_student_summary,
+))
+
+register(ToolSpec(
+    name="get_weak_points",
+    kind="read",
+    pages=("knowledge",),
+    description="按未掌握错题和低于 70 分的记录排出薄弱知识点，带权重、原因、前置知识与科目分布",
+    params="无参数",
+    reader=_read_weak_points,
 ))
