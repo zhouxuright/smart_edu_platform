@@ -40,6 +40,7 @@ PAGE_LABEL = {
     "applications": "投递看板",
     "plan": "我的计划",
     "mistake-book": "错题本",
+    "parent": "家长门户",
     "dashboard": "仪表盘",
     "other": "启程 AI",
 }

@@ -16,16 +16,16 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime, UTC
+from datetime import datetime, timedelta, UTC
 from typing import Any, Awaitable, Callable
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # 状态机与状态文案只有一份实现，Agent 必须复用，不能自己维护一套
 from edu_app.api.applications import STATUS_LABEL, TRANSITIONS
 from edu_app.models.job import JobApplication
-from edu_app.models.learning import MistakeRecord
+from edu_app.models.learning import LearningRecord, MistakeRecord, StudentProfile
 from edu_app.models.plan import InternshipPlan, InternshipPlanTask
 from edu_app.models.resume import Resume
 from edu_app.models.user import User
@@ -711,6 +711,120 @@ async def _apply_resolve_mistake(db: AsyncSession, user: User, args: dict) -> di
     return {"mistake_id": row.id, "resolved": bool(row.is_resolved)}
 
 
+# ------------------------------------------------------------------ 读工具：学情概览
+
+# 投递停在这个状态超过这么多天，就认为需要跟进
+STALLED_DAYS = 7
+STALLED_STATUSES = ("applied", "screening", "interview")
+
+
+async def _read_student_summary(db: AsyncSession, user: User, page_id: Any) -> dict:
+    """家长页用的学情聚合。
+
+    权限沿用 `ensure_student_scope` 的规则：除管理员外只能看本人。
+    家长与学生的绑定关系尚未建模，所以这里刻意不开放 student_id 参数——
+    多一个参数就多一个越权入口。等绑定表建好再一起放开。
+
+    这也是家长页唯一能做的事：读。不提供任何写工具——家长不应该能改孩子的数据。
+    """
+    now = datetime.now(UTC)
+    since = now - timedelta(days=30)
+
+    profile = await db.scalar(select(StudentProfile).where(StudentProfile.user_id == user.id))
+
+    records = (
+        await db.execute(
+            select(LearningRecord)
+            .where(LearningRecord.user_id == user.id)
+            .order_by(LearningRecord.timestamp.desc())
+            .limit(50)
+        )
+    ).scalars().all()
+    recent = [row for row in records if row.timestamp and row.timestamp >= since]
+    scores = [row.score for row in records if row.score is not None]
+
+    mistakes_total = await db.scalar(
+        select(func.count()).select_from(MistakeRecord).where(MistakeRecord.user_id == user.id)
+    ) or 0
+    mistakes_open = await db.scalar(
+        select(func.count()).select_from(MistakeRecord).where(
+            MistakeRecord.user_id == user.id,
+            MistakeRecord.is_resolved == 0,
+        )
+    ) or 0
+    # 待复习数量直接问艾宾浩斯，和错题本页看到的数字必须一致
+    due = await get_due_reviews_for_user(db, user.id, max_items=50)
+
+    plan = await load_current_plan(db, user.id)
+    plan_info = None
+    if plan:
+        tasks = plan.tasks
+        done = sum(1 for task in tasks if task.completed)
+        pending = next((task for task in tasks if not task.completed), None)
+        plan_info = {
+            "target_role": _clip(plan.target_role, 40),
+            "progress": f"{done}/{len(tasks)}",
+            "pending_task": _clip(pending.title, 40) if pending else None,
+        }
+
+    apps = (
+        await db.execute(select(JobApplication).where(JobApplication.user_id == user.id))
+    ).scalars().all()
+    stalled = [
+        app
+        for app in apps
+        if app.status in STALLED_STATUSES and app.updated_at and (now - app.updated_at).days >= STALLED_DAYS
+    ]
+
+    summary = {
+        "student": {
+            "name": _clip(user.full_name, 30) or "这位同学",
+            "role": getattr(user, "role", "student"),
+            "grade": _clip(profile.grade, 20) if profile else None,
+            "learning_style": _clip(profile.learning_style, 20) if profile else None,
+        },
+        "learning": {
+            "records_30d": len(recent),
+            "avg_score": round(sum(scores) / len(scores), 1) if scores else None,
+            "recent": [
+                {
+                    "subject": row.subject,
+                    "topic": _clip(row.topic, 30),
+                    "activity": row.activity_type,
+                    "score": row.score,
+                    "date": row.timestamp.isoformat()[:10] if row.timestamp else None,
+                }
+                for row in records[:5]
+            ],
+        },
+        "mistakes": {
+            "total": int(mistakes_total),
+            "unresolved": int(mistakes_open),
+            "due_review": len(due),
+        },
+        "plan": plan_info,
+        "applications": {
+            "total": len(apps),
+            "stalled": len(stalled),
+            "stalled_companies": [_clip(app.company, 20) for app in stalled[:3]],
+        },
+    }
+
+    empty = not recent and not mistakes_total and not plan and not apps
+    summary["exists"] = not empty
+    if empty:
+        if getattr(user, "role", "student") == "parent":
+            # 别让模型对着空数据编故事，把真实原因交给它转述
+            summary["hint"] = (
+                "家长与学生的绑定关系还没建立，家长账号只能看到自己名下的数据，"
+                "所以读不到孩子的学情。可以建议用户改用学生账号登录。"
+            )
+        else:
+            summary["hint"] = "这个账号还没有学习记录、错题、实习计划或投递数据。"
+
+    return summary
+
+
 # ------------------------------------------------------------------ 注册
 
 register(ToolSpec(
@@ -824,4 +938,13 @@ register(ToolSpec(
     validate=_validate_resolve_mistake,
     preview=_preview_resolve_mistake,
     apply=_apply_resolve_mistake,
+))
+
+register(ToolSpec(
+    name="get_student_summary",
+    kind="read",
+    pages=("parent",),
+    description="读取当前账号的学情概览：近 30 天学习记录与平均分、错题与待复习数、实习计划进度、投递停滞情况",
+    params="无参数",
+    reader=_read_student_summary,
 ))
