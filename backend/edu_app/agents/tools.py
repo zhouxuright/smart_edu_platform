@@ -948,6 +948,184 @@ async def _read_weak_points(db: AsyncSession, user: User, page_id: Any) -> dict:
     return result
 
 
+# ------------------------------------------------------------------ 读工具：跨页下一步
+
+# 优先级写死成常量，不让模型自己排。
+# 同一份数据问两次「先做什么」必须给出同一个答案，否则用户会觉得这个助手在瞎猜。
+PRIORITY_PLAN_DUE = 90      # 计划提醒时间已过，还有任务没勾
+PRIORITY_REVIEW_DUE = 80    # 错题到了该复习的时候（记忆在衰减，拖着会白学）
+PRIORITY_STALLED_APP = 70   # 投递停在中间状态太久，再不跟进就凉了
+PRIORITY_WEAK_POINT = 60    # 有明确薄弱知识点，但没到「今天必须补」的程度
+PRIORITY_PLAN_TODO = 50     # 计划有未完成任务，但还没到提醒点
+
+PAGE_HREF = {
+    "plan": "/plan/internship",
+    "mistake-book": "/mistake-book",
+    "applications": "/applications",
+    "knowledge": "/knowledge",
+}
+
+
+async def _read_next_action(db: AsyncSession, user: User, page_id: Any) -> dict:
+    """跨页聚合：算出「现在最该做的一件事」，模型只负责转述，不负责排序。
+
+    四个数据源全部复用已有的页面级读工具（`_read_plan` / `_read_mistakes` /
+    `_read_weak_points`），保证这里说「有 2 道待复习」时，错题本页看到的也是 2。
+
+    **为什么不复用 `/dashboard/summary`**：那个接口内部会再调一次模型生成建议
+    （`mentor.get_mentor_response`）。读工具是在调主模型之前执行的，套进去就是
+    一次对话两次模型调用——延迟翻倍、配额翻倍，还会把另一个模型的结论当成
+    事实喂给主模型。仪表盘页面上那几个数字也就算了，结论不能二手转述。
+
+    **为什么不算简历**：简历是「准备」类动作，没有到期概念。缺简历只在你已经
+    开始投递时才成为阻塞项，那种情况单独提示比塞进优先级队列更准确。
+    """
+    plan = await _read_plan(db, user, None)
+    mistakes = await _read_mistakes(db, user, None)
+    weak = await _read_weak_points(db, user, None)
+
+    now = datetime.now(UTC)
+    apps = (
+        await db.execute(select(JobApplication).where(JobApplication.user_id == user.id))
+    ).scalars().all()
+    stalled = [
+        app
+        for app in apps
+        if app.status in STALLED_STATUSES
+        and app.updated_at
+        and (now - app.updated_at).days >= STALLED_DAYS
+    ]
+    # 停得最久的先处理
+    stalled.sort(key=lambda app: app.updated_at)
+
+    candidates: list[dict] = []
+
+    if plan.get("exists"):
+        tasks = plan.get("tasks") or []
+        pending = [task for task in tasks if not task["completed"]]
+        if pending:
+            head = pending[0]
+            reminder = plan.get("reminder") or {}
+            due = bool(reminder.get("due"))
+            candidates.append({
+                "kind": "plan_task",
+                "priority": PRIORITY_PLAN_DUE if due else PRIORITY_PLAN_TODO,
+                "title": f"做计划里的下一步：{head['title']}",
+                "why": (
+                    f"7 天计划进度 {plan['progress']}，还有 {len(pending)} 步没做"
+                    + (f"，{reminder.get('hour')} 点的提醒时间已过" if due else "")
+                ),
+                "page": "plan",
+                "href": PAGE_HREF["plan"],
+                "target": {"task_id": head["id"], "day_index": head["day_index"]},
+            })
+
+    if mistakes.get("exists"):
+        # 保留率最低的那道最该先看：遗忘曲线掉下去就白学了
+        due_items = sorted(
+            mistakes.get("due_review") or [], key=lambda item: item["retention_percent"]
+        )
+        if due_items:
+            head = due_items[0]
+            candidates.append({
+                "kind": "review_mistake",
+                "priority": PRIORITY_REVIEW_DUE,
+                "title": f"复习「{head['subject']}·{head['topic']}」",
+                # recommendation_reason 里已经带了保留率，别再前缀一遍，否则
+                # 会渲染成「记忆保留率已降到 20%，记忆保留率已降至 20%…」
+                "why": head["reason"],
+                "page": "mistake-book",
+                "href": PAGE_HREF["mistake-book"],
+                "target": {
+                    "mistake_id": head["mistake_id"],
+                    "retention_percent": head["retention_percent"],
+                    "due_count": len(due_items),
+                },
+            })
+
+    if stalled:
+        head = stalled[0]
+        candidates.append({
+            "kind": "follow_up_application",
+            "priority": PRIORITY_STALLED_APP,
+            "title": f"跟进 {head.company} 的投递",
+            "why": (
+                f"停在「{STATUS_LABEL.get(head.status, head.status)}」"
+                f"已经 {(now - head.updated_at).days} 天没动"
+            ),
+            "page": "applications",
+            "href": PAGE_HREF["applications"],
+            "target": {
+                "application_id": head.id,
+                "can_move_to": sorted(TRANSITIONS.get(head.status, set())),
+                "stalled_total": len(stalled),
+            },
+        })
+
+    if weak.get("exists"):
+        top = (weak.get("weak_points") or [None])[0]
+        if top:
+            chain = "、".join(top["prerequisites"] or []) or None
+            candidates.append({
+                "kind": "close_weak_point",
+                "priority": PRIORITY_WEAK_POINT,
+                "title": f"补「{top['subject']}·{top['topic']}」",
+                "why": top["reason"] + (f"；先修内容：{chain}" if chain else ""),
+                "page": "knowledge",
+                "href": PAGE_HREF["knowledge"],
+                "target": {"subject": top["subject"], "topic": top["topic"], "weight": top["weight"]},
+            })
+
+    overview = {
+        "plan": (
+            {"exists": True, "progress": plan["progress"], "pending": sum(
+                1 for task in plan.get("tasks") or [] if not task["completed"]
+            )}
+            if plan.get("exists") else {"exists": False}
+        ),
+        "mistakes": (
+            {"total": mistakes["total"], "unresolved": mistakes["unresolved"],
+             "due_review": len(mistakes.get("due_review") or [])}
+            if mistakes.get("exists") else {"exists": False}
+        ),
+        "applications": {"total": len(apps), "stalled": len(stalled)},
+        "weak_points": len(weak.get("weak_points") or []) if weak.get("exists") else 0,
+    }
+
+    if not candidates:
+        # 分清「什么都还没做」和「该做的都做完了」——后者是好消息，不该说成没数据
+        touched = plan.get("exists") or mistakes.get("exists") or apps or weak.get("exists")
+        if touched:
+            return {
+                "exists": False,
+                "all_clear": True,
+                "overview": overview,
+                "hint": (
+                    "没有到期动作：计划没有未完成任务、没有到期待复习的错题、"
+                    "没有停滞的投递、也没有明显薄弱点。这是完成状态，不是没数据——"
+                    "可以建议用户做点增量的事（补一段简历、练一次模拟面试、录一条学习记录）。"
+                ),
+            }
+        return {
+            "exists": False,
+            "all_clear": False,
+            "overview": overview,
+            "hint": (
+                "这个账号还没有计划、错题、投递或学习记录，算不出下一步。"
+                "建议先去「我的计划」生成一份 7 天计划，那是最快能给出具体动作的入口。"
+            ),
+        }
+
+    candidates.sort(key=lambda item: -item["priority"])
+    return {
+        "exists": True,
+        "next_action": candidates[0],
+        "alternatives": candidates[1:3],
+        "overview": overview,
+        "rule": "计划到期(90) > 错题该复习(80) > 投递停滞(70) > 薄弱知识点(60) > 计划待办(50)",
+    }
+
+
 # ------------------------------------------------------------------ 注册
 
 register(ToolSpec(
@@ -1079,4 +1257,17 @@ register(ToolSpec(
     description="按未掌握错题和低于 70 分的记录排出薄弱知识点，带权重、原因、前置知识与科目分布",
     params="无参数",
     reader=_read_weak_points,
+))
+
+register(ToolSpec(
+    name="get_next_action",
+    kind="read",
+    pages=("dashboard",),
+    description=(
+        "跨页聚合「现在最该做的一件事」：按固定优先级（计划到期 > 错题该复习 > 投递停滞 > "
+        "薄弱知识点 > 计划待办）从计划、错题本、投递、薄弱点四处选出唯一一项，"
+        "并附带其余候选与整体概览"
+    ),
+    params="无参数",
+    reader=_read_next_action,
 ))

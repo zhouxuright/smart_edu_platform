@@ -82,7 +82,24 @@ async def main() -> int:
         check("错题本有写工具", sorted(write_tools) == ["add_mistake", "resolve_mistake"], str(sorted(write_tools)))
         check("简历页拿不到错题本工具", all(spec.name not in {"list_mistakes", "add_mistake", "resolve_mistake"}
                                        for spec in tools_for("resume")))
-        check("注册表总数为 11", len(REGISTRY) == 11, str(len(REGISTRY)))
+        # 原来这里断言「注册表总数为 11」，每加一个工具就要改一次数字，
+        # 改数字又变成无脑操作——换成不会随工具增减漂移的完整性检查。
+        check(
+            "注册表完整（每个工具都有页面、描述与实现）",
+            all(
+                spec.pages and spec.description and (spec.reader or spec.validate)
+                for spec in REGISTRY.values()
+            ),
+            f"{len(REGISTRY)} 个工具",
+        )
+        check(
+            "错题本工具不会漏到别的页面",
+            all(
+                "mistake-book" in spec.pages
+                for spec in REGISTRY.values()
+                if spec.name in {"list_mistakes", "add_mistake", "resolve_mistake"}
+            ),
+        )
 
         print("—— list_mistakes（空）——")
         reader = REGISTRY["list_mistakes"].reader

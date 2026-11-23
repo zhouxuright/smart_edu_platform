@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 import sys
 import urllib.error
 import urllib.request
@@ -60,11 +61,23 @@ def main() -> int:
     check("取到投递记录", status == 200 and len(items) > 0, f"{len(items)} 条")
     if not items:
         return 1
-    # 优先挑一条还能往前走的（applied 之后才有「下一步」）
-    target = next(
-        (a for a in items if a.get("status") in ("applied", "screening", "interview")),
-        items[0],
-    )
+
+    # 自己造一条「已投递」的探针记录来测状态机。
+    # 原来是从演示账号里挑一条 applied/screening/interview 的，但只要上一次跑过，
+    # 那条就被推进到 interview 了——而 interview -> offer 是合法路径，
+    # 「非法跳级」这条断言必然误报。探针记录用完即删，不污染演示数据。
+    probe_company = f"探针公司{secrets.token_hex(2)}"
+    status, probe = call("POST", "/applications", token, {
+        "company": probe_company,
+        "position": "状态机探针",
+        "channel": "campus",
+        "status": "applied",
+    })
+    if status not in (200, 201) or not isinstance(probe, dict) or not probe.get("id"):
+        print(f"  探针投递创建失败：{status} {probe}")
+        return 1
+    probe_id = probe["id"]
+    target = probe
     print("  目标记录:", target.get("company"), target.get("position"), "状态:", target.get("status"))
 
     # 读上下文
@@ -121,6 +134,10 @@ def main() -> int:
     cross_proposal = (cross.get("proposal") or {}) if status == 200 else {}
     check("跨页写工具被隔离", cross_proposal.get("tool") != "advance_application",
           str(cross_proposal.get("tool")))
+
+    # 探针记录用完即删，别留在演示账号里
+    del_status, _ = call("DELETE", f"/applications/{probe_id}", token)
+    check("探针记录已清理", del_status in (200, 204), f"HTTP {del_status}")
 
     print()
     print(f"通过 {len(passed)} 项，失败 {len(failed)} 项")
