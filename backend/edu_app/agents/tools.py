@@ -880,7 +880,6 @@ async def _read_weak_points(db: AsyncSession, user: User, page_id: Any) -> dict:
     nodes = (
         await db.execute(select(KnowledgeNode).where(KnowledgeNode.subject.in_(subjects)))
     ).scalars().all()
-
     def match_node(subject: str, topic: str):
         exact = next((n for n in nodes if n.subject == subject and n.name == topic), None)
         if exact:
@@ -928,13 +927,24 @@ async def _read_weak_points(db: AsyncSession, user: User, page_id: Any) -> dict:
         "criteria": f"未掌握错题每题计 {MISTAKE_WEIGHT} 分，低于 {LOW_SCORE} 分的记录每次计 {LOW_SCORE_WEIGHT} 分",
     }
     if not nodes:
-        # 说清楚为什么没有前置知识，避免模型自己编一条学习路径
-        result["knowledge_library"] = {
-            "nodes": 0,
-            "note": "知识点库还没有数据，给不出前置知识链，只能按错题和低分排序",
-        }
+        # 区分「整个库是空的」和「只是没有这几个学科的节点」，否则模型会
+        # 对着一个灌了 26 个节点的库说「知识点库还没有数据」
+        library_total = await db.scalar(select(func.count()).select_from(KnowledgeNode)) or 0
+        if library_total == 0:
+            note = "知识点库还没有数据，给不出前置知识链，只能按错题和低分排序"
+        else:
+            missing = "、".join(sorted(subjects))
+            note = f"知识点库里还没有「{missing}」的节点，给不出前置知识链"
+        result["knowledge_library"] = {"nodes": 0, "note": note}
     else:
-        result["knowledge_library"] = {"nodes": len(nodes)}
+        matched = {node.subject for node in nodes}
+        missing = sorted(subjects - matched)
+        library = {"nodes": len(nodes)}
+        if missing:
+            # 部分学科有节点、部分没有时也要说清楚，别让模型以为整库都空
+            library["missing_subjects"] = missing
+            library["note"] = f"「{'、'.join(missing)}」还没有知识节点，这几个科目给不出前置链"
+        result["knowledge_library"] = library
     return result
 
 

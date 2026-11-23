@@ -124,6 +124,9 @@ async def main() -> int:
               str(first.get("prerequisites")))
         check("知识点库状态可读", result.get("knowledge_library", {}).get("nodes", 0) > 0,
               str(result.get("knowledge_library")))
+        # 数学有节点、英语没有：要明确指出缺哪一科，而不是笼统说「库没数据」
+        lib = result.get("knowledge_library", {})
+        check("指出缺失节点的是英语", lib.get("missing_subjects") == ["英语"], str(lib.get("missing_subjects")))
 
         print("—— 科目统计 ——")
         stats = result.get("subject_stats", {})
