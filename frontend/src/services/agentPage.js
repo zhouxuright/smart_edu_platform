@@ -12,6 +12,7 @@ const PAGE_BY_PATH = [
   [/^\/resume/, 'resume'],
   [/^\/applications/, 'applications'],
   [/^\/plan\/internship/, 'plan'],
+  [/^\/mistake-book/, 'mistake-book'],
   [/^\/dashboard/, 'dashboard'],
 ];
 
@@ -19,6 +20,7 @@ export const PAGE_LABEL = {
   resume: '简历工作台',
   applications: '投递看板',
   plan: '我的计划',
+  'mistake-book': '错题本',
   dashboard: '仪表盘',
   other: '启程 AI',
 };

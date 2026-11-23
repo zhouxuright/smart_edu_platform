@@ -25,9 +25,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # 状态机与状态文案只有一份实现，Agent 必须复用，不能自己维护一套
 from edu_app.api.applications import STATUS_LABEL, TRANSITIONS
 from edu_app.models.job import JobApplication
+from edu_app.models.learning import MistakeRecord
 from edu_app.models.plan import InternshipPlan, InternshipPlanTask
 from edu_app.models.resume import Resume
 from edu_app.models.user import User
+from edu_app.services.ebbinghaus import get_due_reviews_for_user
 from edu_app.services.llm_text import strip_inline_markers
 from edu_app.services.plan_store import (
     current_plan as load_current_plan,
@@ -543,6 +545,172 @@ async def _apply_toggle_task(db: AsyncSession, user: User, args: dict) -> dict:
     }
 
 
+# ------------------------------------------------------------------ 读工具：错题本
+
+# 和前端 MistakeBook 的学科下拉保持一致。不在这里收口的话，「数序」「數學」
+# 这种写法会各算一科，统计和筛选全乱。
+SUBJECTS = ("数学", "物理", "化学", "英语", "语文", "历史", "地理", "生物", "政治")
+
+MAX_MISTAKE_CHARS = 2000
+
+
+async def _read_mistakes(db: AsyncSession, user: User, page_id: Any) -> dict:
+    rows = (
+        await db.execute(
+            select(MistakeRecord)
+            .where(MistakeRecord.user_id == user.id)
+            .order_by(MistakeRecord.created_at.desc())
+            .limit(30)
+        )
+    ).scalars().all()
+
+    if not rows:
+        return {"exists": False, "hint": "错题本还是空的，用户可以直接把题干粘进来让你收录"}
+
+    unresolved = [row for row in rows if not row.is_resolved]
+    by_subject: dict[str, int] = {}
+    for row in rows:
+        key = row.subject or "未分类"
+        by_subject[key] = by_subject.get(key, 0) + 1
+
+    # 复习优先级交给已有的艾宾浩斯实现：那边按 analysis_result 里的难度估稳定性，
+    # 在这里重算一遍只会出现两套标准
+    due = await get_due_reviews_for_user(db, user.id, max_items=5)
+
+    return {
+        "exists": True,
+        "total": len(rows),
+        "unresolved": len(unresolved),
+        "resolved": len(rows) - len(unresolved),
+        "by_subject": by_subject,
+        "due_review": [
+            {
+                "mistake_id": item["mistake_id"],
+                "subject": item["subject"],
+                "topic": item["topic"],
+                "retention_percent": int(item["retention_rate"] * 100),
+                "reason": item["recommendation_reason"],
+            }
+            for item in due
+        ],
+        "recent": [
+            {
+                "id": row.id,
+                "subject": row.subject,
+                "topic": row.topic,
+                "content": _clip(row.question_content, 80),
+                "resolved": bool(row.is_resolved),
+                "created_at": row.created_at.isoformat()[:10] if row.created_at else None,
+            }
+            for row in rows[:8]
+        ],
+    }
+
+
+# ------------------------------------------------------------------ 写工具：收录错题
+
+async def _validate_add_mistake(db: AsyncSession, user: User, args: dict) -> dict:
+    content = str(args.get("question_content") or "").strip()
+    if len(content) < 5:
+        raise ToolError("题干太短了，至少要有 5 个字")
+    if len(content) > MAX_MISTAKE_CHARS:
+        raise ToolError(f"题干有 {len(content)} 字，超过 {MAX_MISTAKE_CHARS} 字，请拆成几道再收录")
+
+    subject = str(args.get("subject") or "").strip()
+    if subject not in SUBJECTS:
+        raise ToolError(f"科目只能是：{'、'.join(SUBJECTS)}")
+
+    topic = str(args.get("topic") or "").strip()[:40] or None
+
+    # 同一道题重复收录会让复习清单里出现两条一样的
+    duplicate = await db.scalar(
+        select(MistakeRecord.id)
+        .where(
+            MistakeRecord.user_id == user.id,
+            MistakeRecord.subject == subject,
+            MistakeRecord.question_content == content,
+        )
+        .limit(1)
+    )
+    if duplicate:
+        raise ToolError(f"这道题已经在错题本里了（#{duplicate}），不用重复收录")
+
+    return {"subject": subject, "topic": topic, "content": content}
+
+
+def _preview_add_mistake(ctx: dict) -> dict:
+    return {
+        "kind": "item",
+        "title": f"收录错题「{ctx['topic'] or ctx['subject']}」",
+        "meta": ctx["subject"],
+        "bullets": [_clip(ctx["content"], 120)],
+        "note": "收录后可在错题详情里让 AI 分析错因，分析出的难度会决定它的复习优先级",
+    }
+
+
+async def _apply_add_mistake(db: AsyncSession, user: User, args: dict) -> dict:
+    ctx = await _validate_add_mistake(db, user, args)
+    row = MistakeRecord(
+        user_id=user.id,
+        subject=ctx["subject"],
+        topic=ctx["topic"],
+        question_content=ctx["content"],
+        is_resolved=0,
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return {"mistake_id": row.id, "subject": row.subject, "topic": row.topic}
+
+
+# ------------------------------------------------------------------ 写工具：标记掌握
+
+async def _validate_resolve_mistake(db: AsyncSession, user: User, args: dict) -> dict:
+    try:
+        mistake_id = int(args.get("mistake_id"))
+    except (TypeError, ValueError):
+        raise ToolError("缺少错题 id")
+
+    resolved = args.get("resolved")
+    if not isinstance(resolved, bool):
+        raise ToolError("resolved 只能是 true 或 false")
+
+    row = await db.scalar(
+        select(MistakeRecord).where(
+            MistakeRecord.id == mistake_id,
+            MistakeRecord.user_id == user.id,
+        )
+    )
+    if not row:
+        raise ToolError("找不到这道错题")
+
+    if bool(row.is_resolved) == resolved:
+        raise ToolError(f"这道题已经是「{'已掌握' if resolved else '待巩固'}」了")
+
+    return {"mistake": row, "resolved": resolved}
+
+
+def _preview_resolve_mistake(ctx: dict) -> dict:
+    row, target = ctx["mistake"], ctx["resolved"]
+    return {
+        "kind": "status",
+        "title": f"{row.subject} · {_clip(row.topic or row.question_content, 40)}",
+        "from": "resolved" if row.is_resolved else "unresolved",
+        "from_label": "已掌握" if row.is_resolved else "待巩固",
+        "to": "resolved" if target else "unresolved",
+        "to_label": "已掌握" if target else "待巩固",
+        "note": "标记已掌握后会从复习清单里移除，随时可以改回来",
+    }
+
+
+async def _apply_resolve_mistake(db: AsyncSession, user: User, args: dict) -> dict:
+    ctx = await _validate_resolve_mistake(db, user, args)
+    row = ctx["mistake"]
+    row.is_resolved = 1 if ctx["resolved"] else 0
+    await db.commit()
+    return {"mistake_id": row.id, "resolved": bool(row.is_resolved)}
+
+
 # ------------------------------------------------------------------ 注册
 
 register(ToolSpec(
@@ -625,4 +793,35 @@ register(ToolSpec(
     validate=_validate_toggle_task,
     preview=_preview_toggle_task,
     apply=_apply_toggle_task,
+))
+
+register(ToolSpec(
+    name="list_mistakes",
+    kind="read",
+    pages=("mistake-book",),
+    description="读取错题本：总数、按学科分布、待复习清单（带记忆保留率）、最近收录的错题",
+    params="无参数",
+    reader=_read_mistakes,
+))
+
+register(ToolSpec(
+    name="add_mistake",
+    kind="write",
+    pages=("mistake-book",),
+    description="把一道题收录进错题本，学科必须是固定九科之一",
+    params='{"subject":"数学","topic":"极限","question_content":"题干原文"}',
+    validate=_validate_add_mistake,
+    preview=_preview_add_mistake,
+    apply=_apply_add_mistake,
+))
+
+register(ToolSpec(
+    name="resolve_mistake",
+    kind="write",
+    pages=("mistake-book",),
+    description="把一道错题标记为已掌握，或改回待巩固",
+    params='{"mistake_id":7,"resolved":true}',
+    validate=_validate_resolve_mistake,
+    preview=_preview_resolve_mistake,
+    apply=_apply_resolve_mistake,
 ))
