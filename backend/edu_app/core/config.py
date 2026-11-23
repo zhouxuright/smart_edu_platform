@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     # 超过就排队，排队超过 LLM_QUEUE_TIMEOUT 秒直接返回 503，避免请求堆积。
     LLM_MAX_CONCURRENCY: int = 20
     LLM_QUEUE_TIMEOUT: int = 15
+    # 单价，单位「元 / 百万 token」。默认 0 表示未配置——此时脚本只报 token 数，
+    # 不臆造金额。供应商调价很频繁，不要把具体数字写死在代码里。
+    LLM_PRICE_INPUT_PER_M: float = 0.0
+    LLM_PRICE_OUTPUT_PER_M: float = 0.0
     # 运行期数据根目录。uploads/、storage/resumes/、faiss.index 全挂在它下面。
     # 线上挂持久卷后指过去（如 /data），不配则落到 backend/ 目录——容器里那个目录
     # 是临时的，重启就没了，所以线上必须配。

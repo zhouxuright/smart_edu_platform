@@ -31,6 +31,7 @@ import httpx
 from fastapi import HTTPException
 
 from edu_app.core.config import settings
+from edu_app.services.llm_usage import record_from_http_response
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,15 @@ async def llm_client(timeout: httpx.Timeout | float, base_url: str):
 
     排队超过 LLM_QUEUE_TIMEOUT 秒直接返回 503：与其让用户等 60 秒后超时，
     不如立刻告诉他稍后再试。Retry-After 给前端一个可展示的倒计时。
+
+    event hook 顺带做 token 计量：所有走 httpx 的调用点（8 处）都不用改代码，
+    响应体里的 usage 会被自动累加。这是唯一不漏的做法——逐个调用点手写，
+    漏一处成本就少算一块，以后新增的调用点还会继续漏。
     """
     async with llm_slot():
-        async with httpx.AsyncClient(timeout=timeout, base_url=base_url) as client:
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            base_url=base_url,
+            event_hooks={"response": [record_from_http_response]},
+        ) as client:
             yield client

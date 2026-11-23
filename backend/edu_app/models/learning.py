@@ -119,10 +119,18 @@ class UiEvent(Base):
 
 
 class LlmUsage(Base):
-    """按用户按天统计大模型调用次数。
+    """按用户按天统计大模型调用次数与 token 消耗。
 
     没有这张表之前，所有调模型的接口都是敞开的——一个脚本就能把额度刷光。
     用 (user_id, day) 唯一约束 + 原子自增，避免「先查后写」的竞态。
+
+    两个口径分别服务于不同目的，不要混用：
+    - `count` 是**次数**，用于每日额度限制（超限 429），由 quota.py 维护；
+    - `prompt_tokens` / `completion_tokens` 是**成本**，用于核算花了多少钱，
+      由 llm_usage.py 维护。
+
+    只记次数不记 token 时，无法回答「这个用户花了我多少钱」——
+    一次长简历润色和一句短问答都算 1 次，成本可能差十倍。
     """
     __tablename__ = "llm_usage"
     __table_args__ = (UniqueConstraint("user_id", "day", name="uq_llm_usage_user_day"),)
@@ -131,4 +139,7 @@ class LlmUsage(Base):
     user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
     day = Column(Date, nullable=False, index=True)
     count = Column(Integer, default=0, nullable=False)
+    prompt_tokens = Column(Integer, default=0, nullable=False)
+    completion_tokens = Column(Integer, default=0, nullable=False)
+    total_tokens = Column(Integer, default=0, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))

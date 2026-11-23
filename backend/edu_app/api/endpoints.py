@@ -21,6 +21,7 @@ from edu_app.core.model_router import model_router
 from edu_app.services.advanced_rag_pipeline import advanced_rag_pipeline
 from edu_app.services.embedding import embed_text, embedding_status
 from edu_app.services import quota as quota_service
+from edu_app.services import llm_usage
 from edu_app.services.text_utils import tokenize
 from edu_app.services.llm_text import sanitize_markdown, strip_inline_markers, MarkdownStreamFilter
 from edu_app.services.llm_gate import llm_client
@@ -281,7 +282,12 @@ async def require_llm_quota(current_user: User = Depends(get_current_user)):
     """挂在会触发大模型推理的路由上：检查并扣减当日额度，超限返回 429。
 
     检索类接口不挂——它们走本地 BGE-M3，不产生 API 成本。
+
+    顺带把当前用户写进 contextvar：token 计量发生在闸门层（httpx hook /
+    LangChain callback），那里拿不到请求上下文，只能靠这个标记归属。
+    管理员虽然不计次数配额，但照样要计 token——成本核算不分角色。
     """
+    llm_usage.set_current_user(current_user.id)
     await quota_service.consume_quota(current_user)
     return True
 
@@ -545,6 +551,7 @@ async def mentor_agent_stream(request: schemas.MentorRequest, db: AsyncSession =
         payload = {
             "model": model_name,
             "stream": True,
+            **llm_usage.stream_options(),
             "temperature": 0.5,
             "max_tokens": 4096,
             "messages": [
@@ -571,7 +578,7 @@ async def mentor_agent_stream(request: schemas.MentorRequest, db: AsyncSession =
                         if data == "[DONE]":
                             break
                         try:
-                            obj = json.loads(data)
+                            obj = llm_usage.parse_chunk(data)
                         except json.JSONDecodeError:
                             continue
                         if obj.get("error"):
@@ -735,6 +742,7 @@ async def mentor_agent_websocket(websocket: WebSocket):
                 payload = {
                     "model": model_name,
                     "stream": True,
+                    **llm_usage.stream_options(),
                     "temperature": 0.5,
                     "max_tokens": 4096,
                     "messages": [
@@ -758,7 +766,7 @@ async def mentor_agent_websocket(websocket: WebSocket):
                                     await websocket.send_text("[DONE]")
                                     break
                                 try:
-                                    obj = json.loads(data_str)
+                                    obj = llm_usage.parse_chunk(data_str)
                                     choice = (obj.get("choices") or [{}])[0]
                                     delta = (choice.get("delta") or {}).get("content") or ""
                                     reasoning = (choice.get("delta") or {}).get("reasoning_content") or ""
@@ -995,6 +1003,7 @@ async def collaborative_agent_websocket(websocket: WebSocket):
             payload = {
                 "model": model_name,
                 "stream": True,
+                **llm_usage.stream_options(),
                 "temperature": 0.8,
                 "messages": [
                     {"role": "system", "content": system_prompt},
@@ -1014,7 +1023,7 @@ async def collaborative_agent_websocket(websocket: WebSocket):
                                     await websocket.send_text("[DONE]")
                                     break
                                 try:
-                                    obj = json.loads(data_str)
+                                    obj = llm_usage.parse_chunk(data_str)
                                     choice = (obj.get("choices") or [{}])[0]
                                     delta = (choice.get("delta") or {}).get("content") or ""
                                     reasoning = (choice.get("delta") or {}).get("reasoning_content") or ""
@@ -1098,6 +1107,7 @@ async def collaborative_agent_stream(request: schemas.CollaborativeRequest, curr
         payload = {
             "model": model_name,
             "stream": True,
+            **llm_usage.stream_options(),
             "temperature": 0.8,
             "messages": [
                 {"role": "system", "content": system_prompt},
@@ -1118,7 +1128,7 @@ async def collaborative_agent_stream(request: schemas.CollaborativeRequest, curr
                                 yield "data: [DONE]\n\n"
                                 break
                             try:
-                                obj = json.loads(data)
+                                obj = llm_usage.parse_chunk(data)
                                 choice = (obj.get("choices") or [{}])[0]
                                 delta = (choice.get("delta") or {}).get("content") or ""
                                 reasoning = (choice.get("delta") or {}).get("reasoning_content") or ""
@@ -1217,7 +1227,7 @@ async def knowledge_agent_stream(request: schemas.KnowledgeRequest, db: AsyncSes
             """
             ctx = [{"name": n.name, "description": n.description, "prerequisites": n.prerequisites, "related_nodes": n.related_nodes} for n in relevant_nodes]
             u_content = f"Subject: {request.subject}\nTopic: {request.topic}\nContext:\n{json.dumps(ctx, ensure_ascii=False)}"
-            payload = {"model": model_name, "stream": True, "temperature": 0.3, "messages": [{"role": "system", "content": sys_prompt}, {"role": "user", "content": u_content}], "max_tokens": 4096}
+            payload = {"model": model_name, "stream": True, **llm_usage.stream_options(), "temperature": 0.3, "messages": [{"role": "system", "content": sys_prompt}, {"role": "user", "content": u_content}], "max_tokens": 4096}
             timeout = httpx.Timeout(25.0)
             try:
                 async with llm_client(timeout, base) as client:
@@ -1231,7 +1241,7 @@ async def knowledge_agent_stream(request: schemas.KnowledgeRequest, db: AsyncSes
                                 if data == "[DONE]":
                                     break
                             try:
-                                obj = json.loads(data)
+                                obj = llm_usage.parse_chunk(data)
                                 choice = (obj.get("choices") or [{}])[0]
                                 delta = (choice.get("delta") or {}).get("content") or ""
                                 reasoning = (choice.get("delta") or {}).get("reasoning_content") or ""

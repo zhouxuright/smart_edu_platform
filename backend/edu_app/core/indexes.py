@@ -1,15 +1,18 @@
-"""启动时补齐缺失的索引。
+"""启动时补齐 create_all 覆盖不到的 schema 变更。
 
-为什么不靠 `create_all`：它只负责**建表**，不会给已经存在的表补索引。
-线上库是历史 `create_all` 建出来的，所以哪怕在模型里加了 `index=True`，
-跑起来也不会生效——索引永远是缺的，查询照样全表扫描。
+`create_all` 有两个盲区，本文件两个都要兜：
 
-这里用 `CREATE INDEX IF NOT EXISTS` 显式补一遍：幂等、可重复执行、
-对新库和老库都有效，不需要引入 Alembic 也能先把最痛的地方止住。
+1. **不给已存在的表补索引。** 它只负责建表。线上库是历史建出来的，
+   所以哪怕在模型里加了 `index=True`，跑起来也不会生效——查询照样全表扫描。
+2. **不给已存在的表补列。** 同理，新加一个字段，模型改了、代码上线了，
+   但线上那张表还是旧结构，一查就报 `UndefinedColumn`。
 
-只补「按 user_id 过滤 + 排序或过滤」这一类热查询用到的复合索引。
-单列 `user_id` 索引被复合索引的最左前缀覆盖，不必单独建——多建一个只会
-拖慢写入，还占空间。
+两件事都用幂等 DDL 显式补一遍：`CREATE INDEX IF NOT EXISTS` /
+`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`。可重复执行，对新库和老库都有效，
+不需要引入 Alembic 也能先把最痛的地方止住。
+
+边界要说清楚：这只覆盖**加列**。改类型、加约束、数据迁移仍然需要真正的迁移工具，
+别把它当 Alembic 用。
 
 表名、列名、索引名全是本文件里的常量，不来自外部输入，不存在注入风险。
 """
@@ -30,6 +33,18 @@ INDEXES: tuple[tuple[str, str, str], ...] = (
     ("ix_mistake_records_user_resolved", "mistake_records", "(user_id, is_resolved)"),
 )
 
+# (表, 列, 列定义)。只用于「新增字段」，已有字段的默认值回填靠 DEFAULT 子句。
+COLUMNS: tuple[tuple[str, str, str], ...] = (
+    # 成本核算：只记次数无法区分「一句短问答」和「长简历润色」
+    ("llm_usage", "prompt_tokens", "INTEGER NOT NULL DEFAULT 0"),
+    ("llm_usage", "completion_tokens", "INTEGER NOT NULL DEFAULT 0"),
+    ("llm_usage", "total_tokens", "INTEGER NOT NULL DEFAULT 0"),
+    # 多租户字段（原先散落在 main.py 里手写，统一收到这里）
+    ("users", "tenant_id", "VARCHAR"),
+    ("documents", "tenant_id", "VARCHAR"),
+    ("documents", "owner_id", "INTEGER"),
+)
+
 
 async def ensure_indexes(conn) -> list[str]:
     """在已建好的连接上补索引，返回成功执行的索引名。
@@ -48,4 +63,24 @@ async def ensure_indexes(conn) -> list[str]:
             logger.warning("补索引 %s 失败（表 %s）：%s", name, table, error)
     if done:
         logger.info("已确保 %d 个索引存在：%s", len(done), ", ".join(done))
+    return done
+
+
+async def ensure_columns(conn) -> list[str]:
+    """补缺失的列，返回成功执行的「表.列」。
+
+    加列失败同样不拦启动：缺列的接口会报错，但整个服务不该因此起不来，
+    否则一次 schema 问题就变成全站不可用。
+    """
+    done: list[str] = []
+    for table, column, ddl in COLUMNS:
+        try:
+            await conn.execute(
+                text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {ddl}")
+            )
+            done.append(f"{table}.{column}")
+        except Exception as error:  # noqa: BLE001
+            logger.warning("补列 %s.%s 失败：%s", table, column, error)
+    if done:
+        logger.info("已确保 %d 个字段存在：%s", len(done), ", ".join(done))
     return done

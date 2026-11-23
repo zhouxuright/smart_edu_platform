@@ -1,6 +1,7 @@
 from langchain_openai import ChatOpenAI
 from langchain_core.runnables import RunnableLambda
 from edu_app.core.config import settings
+from edu_app.services.llm_usage import UsageCallback
 import logging
 
 def _fallback_text(payload):
@@ -39,7 +40,9 @@ def get_llm(temperature=0.7, max_tokens=None):
             openai_api_base=base,
             temperature=temperature,
             max_retries=3,
-            request_timeout=60
+            request_timeout=60,
+            # token 计量挂在回调上，不包装 llm 对象——包装会破坏 `prompt | llm` 组合
+            callbacks=[UsageCallback()],
         )
         if max_tokens is not None:
             params["max_tokens"] = int(max_tokens)
