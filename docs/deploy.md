@@ -298,6 +298,16 @@ PermissionError: [Errno 13] Permission denied: '/data/uploads'
 补索引时注意：单列 `user_id` 索引被复合索引的最左前缀覆盖，不要重复建。
 需要新增索引就加到 `INDEXES` 元组里，别去改模型——改了线上也不会生效。
 
+### 5.2 健康检查要查库
+
+`/api/health` 会真的执行一次 `SELECT 1`，库不通返回 **503**。`railway.json` 的
+`healthcheckPath` 和 Dockerfile 的 `HEALTHCHECK` 都指向它。
+
+原来两者都打 `/`，而 `/` 只返回 `index.html`——数据库挂了它照样 200，
+这种健康检查等于没有。注意一个边界：如果**启动时**库就不通，`create_all`
+会先失败，进程根本起不来，这时候健康检查也没机会返回 503；所以它覆盖的是
+「启动后数据库掉线」这一类问题。
+
 ---
 
 ## 六、国内访问

@@ -15,7 +15,7 @@
 
 1. **库对不对**：`backend/.env` 的 `DATABASE_URL` 指向正式库，而不是临时文件库。在 `backend` 目录跑 `python scripts/trial_report.py`，能正常输出表格即说明连得上。
 2. **模型通不通**：随便生成一份计划，看有没有模板提示。有就先去换 `LLM_API_KEY`。
-3. **库干不干净**：同一条统计命令底部会写「已排除 N 个自测账号」。若 `N` 大于 0，说明库里有联调账号，不影响统计（默认已剔除），但正式收数据前建议按第九节清掉。
+3. **库干不干净**：同一条统计命令底部会写「已排除 N 个自测账号」。若 `N` 大于 0，说明库里有联调账号，不影响统计（默认已剔除），但正式收数据前建议按第九节清掉。清理用 `python scripts/clean_probe_accounts.py`（默认只预览），不要手写 SQL。
 
 ## 三、样本与准备
 
@@ -84,15 +84,18 @@ python scripts/trial_report.py --include-test-accounts
 
 - 学生账号与计划属于个人信息。导出统计只保留聚合数字，不要把学生原话、邮箱和计划内容写进对外材料。
 - 试用结束如需删除数据，按账号删除 `internship_plans`、`internship_plan_tasks`、`plan_reminders`、`plan_events` 中对应记录。
-- 清掉联调产生的自测账号（按外键顺序执行，先子表后主表）。下面以 `%@example.com` 为例；若自测账号用了 `e2e`、`probe` 前缀，把条件换成 `email LIKE 'e2e%' OR email LIKE 'probe%'`：
+- 清掉联调产生的自测账号，用脚本，别手写 SQL：
 
-```sql
-DELETE FROM plan_events      WHERE user_id IN (SELECT id FROM users WHERE email LIKE '%@example.com');
-DELETE FROM plan_reminders   WHERE user_id IN (SELECT id FROM users WHERE email LIKE '%@example.com');
-DELETE FROM internship_plan_tasks
- WHERE plan_id IN (SELECT p.id FROM internship_plans p
-                     JOIN users u ON u.id = p.user_id
-                    WHERE u.email LIKE '%@example.com');
-DELETE FROM internship_plans WHERE user_id IN (SELECT id FROM users WHERE email LIKE '%@example.com');
-DELETE FROM users            WHERE email LIKE '%@example.com';
+```bash
+cd backend
+python scripts/clean_probe_accounts.py          # 先看会删谁，默认不删
+python scripts/clean_probe_accounts.py --apply  # 确认无误再执行
 ```
+
+脚本做了三件手工 SQL 容易做错的事：动态找出所有 `user_id` / `owner_id` 列，
+不会漏表；按外键依赖逐轮重试（`documents` 要先清 `document_embeddings` 和
+`document_chunks`）；**硬编码保护 `admin@` / `parent@` / `demo@` 三个演示账号**——
+它们也是 `@example.com`，手写 `email LIKE '%@example.com'` 会把它们一起删掉。
+
+生产库是内网地址（`postgres.railway.internal`），本地连不上，
+要在 Railway 的控制台 shell 里执行上面两条命令。
