@@ -53,6 +53,11 @@ faiss_index = None
 faiss_ids = []
 faiss_dim = None
 DASHBOARD_REC_CACHE = {}
+# 正在后台生成推荐的用户，防止同一用户并发触发多次模型调用
+DASHBOARD_REC_INFLIGHT: set[int] = set()
+# 必须持有后台任务的强引用，否则任务可能在执行途中被 GC 回收
+DASHBOARD_REC_TASKS: set = set()
+DASHBOARD_REC_TTL = 3600
 
 # 可选的向量检索后端
 pinecone = None
@@ -305,7 +310,7 @@ async def register(user: schemas.UserCreate, db: AsyncSession = Depends(get_db))
     if result.scalars().first():
         raise HTTPException(status_code=400, detail="邮箱已被注册")
     
-    hashed_password = auth.get_password_hash(user.password)
+    hashed_password = await auth.get_password_hash_async(user.password)
     # Public sign-ups are individual student accounts. Organization roles are provisioned separately.
     new_user = User(email=user.email, hashed_password=hashed_password, full_name=user.full_name, role="student", tenant_id=None)
     db.add(new_user)
@@ -323,7 +328,10 @@ async def llm_quota_status(current_user: User = Depends(get_current_user)):
 async def login(user: schemas.UserLogin, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.email == user.email))
     db_user = result.scalars().first()
-    if not db_user or not auth.verify_password(user.password, db_user.hashed_password):
+    if not db_user:
+        raise HTTPException(status_code=401, detail="凭证无效")
+    # argon2 校验走线程池，别在事件循环里算（单次 48ms，会卡住整个进程）
+    if not await auth.verify_password_async(user.password, db_user.hashed_password):
         raise HTTPException(status_code=401, detail="凭证无效")
     
     access_token = auth.create_access_token(data={"sub": db_user.email})
@@ -1390,6 +1398,61 @@ async def parent_agent(request: schemas.ParentReportRequest, db: AsyncSession = 
 
 
 # 仪表盘汇总
+def _clean_recommendation_lines(ai_text: str) -> list[str]:
+    """把模型输出洗成 3 条干净的推荐行动。"""
+    clean_lines = []
+    for ln in (ai_text or "").splitlines():
+        # 先洗掉 Markdown 标记，再去序号/CoT 标题头，避免 `**目标**：` 这类漏网
+        line = strip_inline_markers(ln)
+        line = re.sub(r"^[\s\d\.\-、)）]+", "", line).strip()
+        # 过滤 "目标:", "思考:", "行动步骤:", "下一步:" 等 CoT 标题头
+        line = re.sub(r"^(目标|思考|行动步骤|结果/下一步|下一步)[\s：:]*", "", line).strip()
+        if line and len(line) > 5 and line not in ["目标", "思考", "行动步骤", "下一步", "行动建议"]:
+            clean_lines.append(line)
+    return clean_lines[:3]
+
+
+async def _refresh_dashboard_recommendations(user_id: int, full_name: str, record_count: int) -> None:
+    """后台生成仪表盘推荐行动，结果写进进程内缓存。
+
+    必须用独立 session：请求的 session 在响应返回后就关了，
+    拿它做后台任务会抛 "Session is closed"。
+    """
+    try:
+        async with AsyncSessionLocal() as db:
+            profile = (
+                await db.execute(select(StudentProfile).where(StudentProfile.user_id == user_id))
+            ).scalars().first()
+            # 产品面向大学生生涯规划（实习/求职），默认画像不能再按中学学科给建议
+            profile_data = {
+                "grade": getattr(profile, "grade", "大三"),
+                "interests": getattr(profile, "interests", "互联网产品, 数据分析"),
+                "learning_style": getattr(profile, "learning_style", "混合型"),
+                "name": full_name,
+            }
+            history = [{"role": "system", "content": f"最近学习记录数: {record_count}"}]
+            msg = "基于近期学情，直接给出3条具体可执行的学习行动建议，不要包含标题或思考过程。"
+            ai_text = await mentor.get_mentor_response(profile_data, msg, history)
+            lines = _clean_recommendation_lines(ai_text)
+            if lines:
+                DASHBOARD_REC_CACHE[user_id] = (datetime.now(UTC).timestamp(), lines)
+    except Exception as error:  # noqa: BLE001 - 后台任务失败不能影响任何人
+        logging.warning("仪表盘推荐后台生成失败 user=%s: %s", user_id, error)
+    finally:
+        DASHBOARD_REC_INFLIGHT.discard(user_id)
+
+
+def _schedule_dashboard_recommendations(user_id: int, full_name: str, record_count: int) -> None:
+    if user_id in DASHBOARD_REC_INFLIGHT:
+        return
+    DASHBOARD_REC_INFLIGHT.add(user_id)
+    task = asyncio.create_task(
+        _refresh_dashboard_recommendations(user_id, full_name, record_count)
+    )
+    DASHBOARD_REC_TASKS.add(task)
+    task.add_done_callback(DASHBOARD_REC_TASKS.discard)
+
+
 @router.get("/dashboard/summary")
 async def dashboard_summary(db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     since = datetime.now(UTC) - timedelta(days=14)
@@ -1446,41 +1509,16 @@ async def dashboard_summary(db: AsyncSession = Depends(get_db), current_user: Us
     except Exception:
         pass
 
-    # Try AI mentor suggestions based on profile and history
-    try:
-        cached_rec = DASHBOARD_REC_CACHE.get(current_user.id)
-        if cached_rec and (datetime.now(UTC).timestamp() - cached_rec[0] < 3600):
-            if cached_rec[1]:
-                recommendations = cached_rec[1]
-        else:
-            p_result = await db.execute(select(StudentProfile).where(StudentProfile.user_id == current_user.id))
-            profile = p_result.scalars().first()
-            # 产品面向大学生生涯规划（实习/求职），默认画像不能再按中学学科给建议
-            profile_data = {
-                "grade": getattr(profile, "grade", "大三"),
-                "interests": getattr(profile, "interests", "互联网产品, 数据分析"),
-                "learning_style": getattr(profile, "learning_style", "混合型"),
-                "name": current_user.full_name,
-            }
-            history = [
-                {"role": "system", "content": f"最近学习记录数: {len(records)}"}
-            ]
-            msg = "基于近期学情，直接给出3条具体可执行的学习行动建议，不要包含标题或思考过程。"
-            ai_text = await mentor.get_mentor_response(profile_data, msg, history)
-            clean_lines = []
-            for ln in ai_text.splitlines():
-                # 先洗掉 Markdown 标记，再去序号/CoT 标题头，避免 `**目标**：` 这类漏网
-                line = strip_inline_markers(ln)
-                line = re.sub(r"^[\s\d\.\-、)）]+", "", line).strip()
-                # 过滤 "目标:", "思考:", "行动步骤:", "下一步:" 等 CoT 标题头
-                line = re.sub(r"^(目标|思考|行动步骤|结果/下一步|下一步)[\s：:]*", "", line).strip()
-                if line and len(line) > 5 and line not in ["目标", "思考", "行动步骤", "下一步", "行动建议"]:
-                    clean_lines.append(line)
-            if clean_lines:
-                recommendations = clean_lines[:3]
-                DASHBOARD_REC_CACHE[current_user.id] = (datetime.now(UTC).timestamp(), recommendations)
-    except Exception:
-        pass
+    # 推荐行动要调模型，但不能在请求路径里等：冷缓存时用户看到的就是首屏一直转圈。
+    # 改成「有旧的就先用旧的，没有就先用上面算出来的规则版兜底」，同时后台生成，
+    # 下次打开就是模型版。用户永远不用等模型。
+    cached_rec = DASHBOARD_REC_CACHE.get(current_user.id)
+    if cached_rec and cached_rec[1]:
+        recommendations = cached_rec[1]
+        if (datetime.now(UTC).timestamp() - cached_rec[0]) >= DASHBOARD_REC_TTL:
+            _schedule_dashboard_recommendations(current_user.id, current_user.full_name, len(records))
+    else:
+        _schedule_dashboard_recommendations(current_user.id, current_user.full_name, len(records))
 
 
     # Get mistakes count

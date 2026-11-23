@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 from edu_app.api import endpoints
 from edu_app.core.database import engine, Base, AsyncSessionLocal
+from edu_app.core.indexes import ensure_indexes
 from sqlalchemy import text
 from edu_app.models import user, learning, saas, plan, job, notification, resume, agent  # 导入模型以完成注册
 from edu_app.core.tenant_middleware import TenantContextMiddleware
@@ -34,6 +35,8 @@ from sqlalchemy.future import select
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # create_all 只建表、不给已有表补索引，所以单独补一遍（幂等）
+        await ensure_indexes(conn)
         try:
             await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS tenant_id VARCHAR"))
             await conn.execute(text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS tenant_id VARCHAR"))
