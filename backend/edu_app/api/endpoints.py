@@ -23,6 +23,7 @@ from edu_app.services.embedding import embed_text, embedding_status
 from edu_app.services import quota as quota_service
 from edu_app.services.text_utils import tokenize
 from edu_app.services.llm_text import sanitize_markdown, strip_inline_markers, MarkdownStreamFilter
+from edu_app.services.llm_gate import llm_client
 import numpy as np
 import faiss
 import json
@@ -552,7 +553,7 @@ async def mentor_agent_stream(request: schemas.MentorRequest, db: AsyncSession =
             return f"data: {json.dumps({'content': text}, ensure_ascii=False)}\n\n"
 
         try:
-            async with httpx.AsyncClient(timeout=timeout, base_url=base) as client:
+            async with llm_client(timeout, base) as client:
                 async with client.stream("POST", "/chat/completions", headers=headers, json=payload) as resp:
                     resp.raise_for_status()
                     async for line in resp.aiter_lines():
@@ -736,7 +737,7 @@ async def mentor_agent_websocket(websocket: WebSocket):
                 }
                 timeout = httpx.Timeout(20.0)
                 try:
-                    async with httpx.AsyncClient(timeout=timeout, base_url=base) as client:
+                    async with llm_client(timeout, base) as client:
                         async with client.stream("POST", "/chat/completions", headers=headers, json=payload) as resp:
                             async for line in resp.aiter_lines():
                                 if not line:
@@ -995,7 +996,7 @@ async def collaborative_agent_websocket(websocket: WebSocket):
             }
             timeout = httpx.Timeout(20.0)
             try:
-                async with httpx.AsyncClient(timeout=timeout, base_url=base) as client:
+                async with llm_client(timeout, base) as client:
                     async with client.stream("POST", "/chat/completions", headers=headers, json=payload) as resp:
                         async for line in resp.aiter_lines():
                             if not line: continue
@@ -1098,7 +1099,7 @@ async def collaborative_agent_stream(request: schemas.CollaborativeRequest, curr
         }
         timeout = httpx.Timeout(20.0)
         try:
-            async with httpx.AsyncClient(timeout=timeout, base_url=base) as client:
+            async with llm_client(timeout, base) as client:
                 async with client.stream("POST", "/chat/completions", headers=headers, json=payload) as resp:
                     async for line in resp.aiter_lines():
                         if not line:
@@ -1211,7 +1212,7 @@ async def knowledge_agent_stream(request: schemas.KnowledgeRequest, db: AsyncSes
             payload = {"model": model_name, "stream": True, "temperature": 0.3, "messages": [{"role": "system", "content": sys_prompt}, {"role": "user", "content": u_content}], "max_tokens": 4096}
             timeout = httpx.Timeout(25.0)
             try:
-                async with httpx.AsyncClient(timeout=timeout, base_url=base) as client:
+                async with llm_client(timeout, base) as client:
                     async with client.stream("POST", "/chat/completions", headers=headers, json=payload) as resp:
                         acc = ""
                         async for line in resp.aiter_lines():
@@ -2227,7 +2228,7 @@ async def process_ocr_image(content: bytes, mime_type: str) -> str:
     }
     
     timeout = httpx.Timeout(30.0)
-    async with httpx.AsyncClient(timeout=timeout, base_url=base) as client:
+    async with llm_client(timeout, base) as client:
         resp = await client.post("/chat/completions", headers=headers, json=payload)
         if resp.status_code != 200:
              logging.error(f"LLM Error: {resp.text}")

@@ -59,38 +59,61 @@ async def quota_status(user: User) -> dict:
 
 
 async def consume_quota(user: User, cost: int = 1) -> dict:
-    """检查并扣减一次额度。超限抛 429。返回扣减后的状态。"""
+    """检查并扣减一次额度。超限抛 429。返回扣减后的状态。
+
+    检查与扣减必须在同一条语句里完成。原实现是「先 select 判断够不够，
+    再 upsert 自增」——并发下两个请求会同时读到 used=29（上限 30）、都判定通过，
+    实际扣成 31，额度控制形同虚设。这里把判断写进 ON CONFLICT ... DO UPDATE
+    的 WHERE 子句，由数据库保证原子性：条件不满足就不更新，RETURNING 拿不到行
+    即为超限。
+    """
     if _is_admin(user):
         return {"unlimited": True, "used": 0, "limit": None, "remaining": None}
 
     day = date.today()
     limit = daily_limit()
 
+    # 单次扣减就超过上限（比如 cost=5 而 limit=1），条件更新永远不会命中，
+    # 先拦掉，避免报出来的 used 是 0 让人看不懂。
+    if cost > limit:
+        raise HTTPException(
+            status_code=429,
+            detail=f"今日 AI 额度已用完（0/{limit}），明天 0 点重置。",
+        )
+
+    table = LlmUsage.__table__
+    stmt = pg_insert(LlmUsage).values(user_id=user.id, day=day, count=cost)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["user_id", "day"],
+        set_={"count": table.c.count + cost},
+        where=(table.c.count + cost <= limit),
+    ).returning(table.c.count)
+
     async with AsyncSessionLocal() as db:
-        used = await db.scalar(
-            select(LlmUsage.count).where(LlmUsage.user_id == user.id, LlmUsage.day == day)
-        )
-        used = int(used or 0)
-
-        if used + cost > limit:
-            raise HTTPException(
-                status_code=429,
-                detail=f"今日 AI 额度已用完（{used}/{limit}），明天 0 点重置。",
-            )
-
-        # 原子自增：并发下不会互相覆盖计数
-        stmt = pg_insert(LlmUsage).values(user_id=user.id, day=day, count=cost)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["user_id", "day"],
-            set_={"count": LlmUsage.__table__.c.count + cost},
-        )
         try:
-            await db.execute(stmt)
+            new_count = await db.scalar(stmt)
             await db.commit()
         except Exception as exc:
             # 计数失败不应该拦住正常业务，但要留痕
             await db.rollback()
             logger.warning("记录 AI 额度失败：%s", exc)
-            return {"unlimited": False, "used": used, "limit": limit, "remaining": max(0, limit - used)}
+            return {"unlimited": False, "used": 0, "limit": limit, "remaining": limit}
 
-    return {"unlimited": False, "used": used + cost, "limit": limit, "remaining": max(0, limit - used - cost)}
+        if new_count is None:
+            # 条件没命中：要么会超限，要么记录不存在且 cost>limit
+            used = await db.scalar(
+                select(table.c.count).where(table.c.user_id == user.id, table.c.day == day)
+            )
+            used = int(used if used is not None else limit)
+            raise HTTPException(
+                status_code=429,
+                detail=f"今日 AI 额度已用完（{used}/{limit}），明天 0 点重置。",
+            )
+
+    new_count = int(new_count)
+    return {
+        "unlimited": False,
+        "used": new_count,
+        "limit": limit,
+        "remaining": max(0, limit - new_count),
+    }

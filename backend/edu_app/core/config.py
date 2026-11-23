@@ -34,6 +34,19 @@ class Settings(BaseSettings):
     EMBEDDING_MAX_LENGTH: int = 512
     # 是否打印每条 SQL。本地排查时打开，线上必须关：一是日志量，二是把参数打到日志里
     DB_ECHO: bool = False
+    # 连接池上限。不显式配置时 SQLAlchemy 默认 5+10=15，单个副本就吃掉 15 条连接；
+    # 将来加到多副本，每副本都按这个数算进 Postgres 的 max_connections。
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 20
+    DB_POOL_TIMEOUT: int = 30
+    # 每个用户的每分钟请求上限。单副本用进程内计数即可，不引入 Redis。
+    RATE_LIMIT_PER_MINUTE: int = 120
+    # 登录/注册单独收紧，防撞库。同一个 key 每分钟最多试这么多次。
+    RATE_LIMIT_AUTH_PER_MINUTE: int = 10
+    # 同时打给大模型的请求数上限。供应商的并发限制通常比服务器先到，
+    # 超过就排队，排队超过 LLM_QUEUE_TIMEOUT 秒直接返回 503，避免请求堆积。
+    LLM_MAX_CONCURRENCY: int = 20
+    LLM_QUEUE_TIMEOUT: int = 15
     # 运行期数据根目录。uploads/、storage/resumes/、faiss.index 全挂在它下面。
     # 线上挂持久卷后指过去（如 /data），不配则落到 backend/ 目录——容器里那个目录
     # 是临时的，重启就没了，所以线上必须配。

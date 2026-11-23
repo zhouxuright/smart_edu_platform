@@ -24,6 +24,7 @@ from edu_app.services.plan_store import (
     set_task_completed,
     task_payload as _task_payload,
 )
+from edu_app.services.llm_gate import llm_client
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -188,7 +189,7 @@ async def _generate_with_model(target_role: str, stage: str, weekly_hours: int) 
         '{"title":"不超过20字","action":"具体做法，不超过120字","deliverable":"当天可检查的交付物","estimated_minutes":45}'
     )
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0), base_url=base) as client:
+        async with llm_client(httpx.Timeout(30.0), base) as client:
             response = await client.post(
                 "/chat/completions",
                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},

@@ -265,6 +265,26 @@ PermissionError: [Errno 13] Permission denied: '/data/uploads'
 > 同类问题在 Render / Fly 上一样会出现。判断方法：看运行时日志里有没有
 > `PermissionError`，而不是只看平台给的状态颜色。
 
+### 5. 并发上限分布在哪三处
+
+线上不会无限接请求，三个闸门各管一段，都可以用环境变量调：
+
+| 闸门 | 默认值 | 环境变量 | 超了会怎样 |
+| --- | --- | --- | --- |
+| 用户请求频率 | 120 次/分钟 | `RATE_LIMIT_PER_MINUTE` | 429 + `Retry-After` |
+| 登录/注册 | 10 次/分钟 | `RATE_LIMIT_AUTH_PER_MINUTE` | 429（防撞库） |
+| 同时在跑的模型调用 | 20 个 | `LLM_MAX_CONCURRENCY` | 排队，超 `LLM_QUEUE_TIMEOUT`（15s）返回 503 |
+| 数据库连接 | 10 + 20 溢出 | `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` | 等待，超 `DB_POOL_TIMEOUT`（30s）抛错 |
+
+调之前先想清楚瓶颈在哪。这个应用是 I/O 密集型，CPU 不是瓶颈，
+**供应商的并发额度通常比服务器先到**——所以 `LLM_MAX_CONCURRENCY` 不要盲目调大，
+先确认 DeepSeek 那边的限额。
+
+加副本（`numReplicas > 1`）之前必须先做完无状态化：索引进 pgvector、
+定时任务拆 cron、文件进对象存储。否则会出现「副本 A 索引旧、副本 B 索引新」
+和「提醒被推送 3 遍」。连接数也要重算：副本数 × 30 必须小于 Postgres 的
+`max_connections`。
+
 ---
 
 ## 六、国内访问

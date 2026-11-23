@@ -30,6 +30,7 @@ from edu_app.models.user import User
 from edu_app.services import resume_files
 from edu_app.services.document_pipeline import ParseError, extract_text
 from edu_app.services.llm_text import strip_inline_markers
+from edu_app.services.llm_gate import llm_client
 from edu_app.services.resume_pdf import build_resume_pdf
 from edu_app.services.resume_store import snapshot as _snapshot
 
@@ -606,7 +607,7 @@ async def _chat_completion(prompt: str, max_tokens: int = 900, temperature: floa
         "deepseek-chat" if "deepseek.com" in base else "gpt-4o"
     )
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(45.0), base_url=base) as client:
+        async with llm_client(httpx.Timeout(45.0), base) as client:
             response = await client.post(
                 "/chat/completions",
                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},

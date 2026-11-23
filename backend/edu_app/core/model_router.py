@@ -2,6 +2,7 @@ import logging
 import httpx
 from typing import Dict, Any, Optional
 from edu_app.core.config import settings
+from edu_app.services.llm_gate import llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ class ModelRouter:
             "max_tokens": 1024
         }
         timeout = httpx.Timeout(15.0)
-        async with httpx.AsyncClient(timeout=timeout, base_url=base_url) as client:
+        async with llm_client(timeout, base_url) as client:
             resp = await client.post("/chat/completions", headers=headers, json=payload)
             if resp.status_code == 200:
                 data = resp.json()

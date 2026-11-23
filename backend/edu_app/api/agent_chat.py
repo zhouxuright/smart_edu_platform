@@ -30,6 +30,7 @@ from edu_app.core.config import settings
 from edu_app.core.database import get_db
 from edu_app.models.agent import AgentProposal
 from edu_app.models.user import User
+from edu_app.services.llm_gate import llm_slot
 
 router = APIRouter(tags=["agent"])
 logger = logging.getLogger(__name__)
@@ -203,9 +204,11 @@ async def agent_chat(
 
     try:
         llm = get_llm(temperature=0.2, max_tokens=900)
-        result = await llm.ainvoke(
-            [SystemMessage(content=system_prompt), HumanMessage(content=human)]
-        )
+        # 走 SDK 的调用也要占同一个额度池，否则闸门只管住 httpx 那几条路径
+        async with llm_slot():
+            result = await llm.ainvoke(
+                [SystemMessage(content=system_prompt), HumanMessage(content=human)]
+            )
         content = getattr(result, "content", "")
         if isinstance(content, list):
             content = "".join(str(part) for part in content)

@@ -15,6 +15,7 @@ from edu_app.core.database import engine, Base, AsyncSessionLocal
 from sqlalchemy import text
 from edu_app.models import user, learning, saas, plan, job, notification, resume, agent  # 导入模型以完成注册
 from edu_app.core.tenant_middleware import TenantContextMiddleware
+from edu_app.core.rate_limit import RateLimitMiddleware
 from edu_app.api import webrtc_agent, internship_plans, rag_documents, ui_events, applications, notifications, resumes
 # agent_chat 依赖 endpoints / applications，必须放在它们之后导入
 from edu_app.api import agent_chat
@@ -119,6 +120,9 @@ origins = settings.cors_origin_list
 allow_all = origins == ["*"]
 
 app.add_middleware(TenantContextMiddleware)
+# 限流放在 CORS 内层：429 也要带上 CORS 头，否则前端只看到 "CORS error"，
+# 看不到真正的「请求过于频繁」。
+app.add_middleware(RateLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -145,12 +149,28 @@ app.mount("/static", StaticFiles(directory=UPLOAD_DIR), name="static")
 
 logging.basicConfig(level=logging.INFO)
 
+# 只审计写操作。读请求占实际流量九成以上，而前端还会轮询额度、通知这类接口，
+# 给它们每条都 insert 一行 audit_events 等于把数据库当日志文件用：
+# 一次页面加载几十个请求就是几十次写库，并发上来先被审计拖垮。
+# 静态资源和 SPA 页面请求完全不记，交给平台自己的访问日志。
+_AUDIT_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
 @app.middleware("http")
 async def audit_logger(request: Request, call_next):
     start = datetime.now(UTC).timestamp()
     response = await call_next(request)
     duration = datetime.now(UTC).timestamp() - start
-    logging.info(f"method={request.method} path={request.url.path} status={response.status_code} duration={duration:.3f}s")
+
+    path = request.url.path
+    if not path.startswith("/api"):
+        return response
+
+    logging.info(f"method={request.method} path={path} status={response.status_code} duration={duration:.3f}s")
+
+    if request.method not in _AUDIT_METHODS:
+        return response
+
     try:
         auth_header = request.headers.get("Authorization", "")
         email = None
@@ -171,7 +191,7 @@ async def audit_logger(request: Request, call_next):
                 user_id=getattr(db_user, "id", None),
                 tenant_id=getattr(db_user, "tenant_id", None),
                 method=request.method,
-                path=request.url.path,
+                path=path,
                 status_code=response.status_code,
                 duration_ms=duration * 1000.0,
             )

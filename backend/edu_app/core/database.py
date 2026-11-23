@@ -11,6 +11,12 @@ engine = create_async_engine(
     pool_pre_ping=True,
     # 比数据库侧的空闲超时更短，主动换新连接，别等对方先动手
     pool_recycle=300,
+    # 不显式配就是 5+10=15 条常驻连接，且 pool_timeout 默认 30 秒会静默排队。
+    # 这里显式写出来：一是让上限可见，二是多副本时能算清总连接数
+    # （副本数 × (pool_size + max_overflow) 必须小于 Postgres 的 max_connections）。
+    pool_size=settings.DB_POOL_SIZE,
+    max_overflow=settings.DB_MAX_OVERFLOW,
+    pool_timeout=settings.DB_POOL_TIMEOUT,
 )
 
 AsyncSessionLocal = sessionmaker(
