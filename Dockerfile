@@ -50,8 +50,9 @@ WORKDIR /app
 
 # libgomp1 是 faiss / torch 的 OpenMP 运行时，slim 镜像里没有，
 # 缺了会在 import faiss 时报 "libgomp.so.1: cannot open shared object file"
+# gosu 用于入口脚本里从 root 降权到 appuser（见 entrypoint.sh 的说明）
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libgomp1 curl \
+    && apt-get install -y --no-install-recommends libgomp1 curl gosu \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt ./
@@ -69,12 +70,12 @@ COPY backend/ ./
 # 前端产物由上一阶段构建好，直接搬进来
 COPY --from=web /web/dist ./frontend_dist
 
-# 运行期数据目录：/data 是要挂持久卷的位置，先建好并交给 appuser，
-# 否则非 root 用户挂载后写不进去
+# 运行期数据目录：/data 是要挂持久卷的位置，先建好并交给 appuser。
+# 注意：镜像里的 chown 会被平台挂卷覆盖（挂载点是 root 的），
+# 所以真正的修权限动作放在 entrypoint.sh 里，以 root 启动后再降权。
 RUN mkdir -p /data/uploads /data/storage/resumes /app/.cache/huggingface \
     && useradd -m -u 10001 appuser \
     && chown -R appuser:appuser /data /app
-USER appuser
 
 EXPOSE 8000
 
@@ -82,8 +83,9 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
     CMD curl -fsS "http://127.0.0.1:${PORT:-8000}/" || exit 1
 
+# 入口脚本以 root 起：修正 /data 属主 → gosu 降权到 appuser 跑 uvicorn。
 # --proxy-headers：Render / Railway / Fly 都在前面挡了一层反代，不加的话
 # request.base_url 会是 http://0.0.0.0:8000，上传接口返回的图片地址就是错的。
 # 单进程：FAISS 索引常驻内存，后台还有两个循环任务（每小时重建索引、
 # 每分钟检查计划提醒），多 worker 会让它们各跑一份。
-CMD ["sh", "-c", "uvicorn edu_app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --proxy-headers --forwarded-allow-ips=*"]
+CMD ["sh", "/app/entrypoint.sh"]
