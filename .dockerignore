@@ -39,3 +39,6 @@ backend/*.log
 docs
 *.pdf
 *.md
+
+# 本地开发用的 Milvus 数据卷（几百 MB），镜像完全不需要
+docker
