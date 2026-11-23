@@ -58,11 +58,13 @@ npm run dev
 
 ## 部署
 
+**线上地址**：<https://qicheng-production.up.railway.app>（Railway 单容器 + 自带 Postgres）
+
 **一个容器全包**：前端构建产物和后端打进同一个镜像，同一个 URL 同时提供页面和 API。
 不需要单独托管前端，也不存在跨域问题。
 
 后端不能放 Vercel——项目有常驻后台任务、写本地盘、依赖体积超函数上限。
-推荐 **Railway（容器 + 持久卷）+ Neon（Postgres）**，约 $5/月。
+推荐 **Railway（容器 + 持久卷 + 自带 Postgres）**，约 $5/月。
 步骤和踩坑见 [`docs/deploy.md`](docs/deploy.md)。
 
 ```bash

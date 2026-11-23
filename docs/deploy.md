@@ -6,7 +6,30 @@
 > 同一个 URL 同时提供页面和 API。不需要 Vercel，不需要配 CORS，
 > 只需要一个平台账号 + 一个数据库。
 
-推荐组合：**Railway（容器 + 持久卷）+ Neon（Postgres）**，约 **$5/月**。
+推荐组合：**Railway（容器 + 持久卷 + 自带 Postgres）**，约 **$5/月**。
+
+---
+
+## 当前线上实例
+
+| 项 | 值 |
+| --- | --- |
+| 地址 | <https://qicheng-production.up.railway.app> |
+| 平台 | Railway，项目 `qicheng`（`3cbf4947-b10f-4645-9525-e1b153a19006`） |
+| 服务 | `qicheng`，单副本，卷 `qicheng-volume` 挂 `/data` |
+| 数据库 | 同项目 `Postgres` 服务，`DATABASE_URL=${{Postgres.DATABASE_URL}}` |
+| 演示账号 | `admin@example.com` / `parent@example.com`（密码在交付时单独给，不写进仓库） |
+| 验收 | `smoke_remote.py` 12/12，`single_service_check.cjs` 10/10 |
+
+重新部署（改了代码之后）：
+
+```bash
+git archive HEAD | tar -x -C /tmp/deploy     # 生成干净快照，避开本地 node_modules
+cd /tmp/deploy && railway up -d -y -s qicheng
+```
+
+> 直接在当前目录 `railway up` 可能报 `拒绝访问 (os error 5)`——
+> 本地有被占用的文件（数据库卷、锁文件）时 CLI 索引会失败。用快照目录最稳。
 
 ---
 
@@ -47,11 +70,25 @@
 代码已在 GitHub：`zhouxuright/smart_edu_platform`。
 Railway 和 Neon 都用 GitHub 账号登录即可，不需要信用卡（Railway 有 30 天 $5 试用）。
 
-### 1. Neon：建数据库
+### 1. 数据库：用 Railway 自带 Postgres（推荐）
 
-1. <https://neon.tech> 用 GitHub 登录。
-2. Create project → 区域选 **Singapore**。
-3. 复制 **Direct connection** 的连接串。
+在同一个 Railway 项目里 New → Database → **Add PostgreSQL**，然后把应用服务的
+`DATABASE_URL` 设成变量引用：
+
+```
+DATABASE_URL = ${{Postgres.DATABASE_URL}}
+```
+
+好处是数据库和应用在同一个私有网络里（`postgres.railway.internal:5432`），
+不用管 SSL、不用管跨区延迟、也不多一个账号。
+
+> 用 Neon 也可以（见本节末尾的备选说明），但没必要多一个外部依赖。
+
+<details>
+<summary>备选：Neon 免费库</summary>
+
+1. <https://neon.tech> 用 GitHub 登录 → Create project → 区域选 **Singapore**。
+2. 复制 **Direct connection** 的连接串。
 
 **必须用直连串，不要用带 `-pooler` 的：**
 
@@ -66,6 +103,9 @@ postgresql://user:pass@ep-xxx-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode
 
 连接串**原样粘**就行，`config.py` 会自动补 `+asyncpg` 并把 `sslmode` 改写成 `ssl`。
 
+</details>
+
+
 ### 2. Railway：部署容器
 
 1. <https://railway.app> 用 GitHub 登录 → New Project → Deploy from GitHub repo。
@@ -76,7 +116,7 @@ postgresql://user:pass@ep-xxx-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode
 
 | 变量 | 值 |
 | --- | --- |
-| `DATABASE_URL` | Neon 直连串 |
+| `DATABASE_URL` | `${{Postgres.DATABASE_URL}}`（Railway 变量引用） |
 | `LLM_API_KEY` | 你的 DeepSeek key |
 | `LLM_API_BASE` | `https://api.deepseek.com/v1` |
 | `LLM_MODEL` | `deepseek-chat` |
@@ -85,6 +125,10 @@ postgresql://user:pass@ep-xxx-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode
 | `CORS_ORIGINS` | `*`（同源，配不配都不影响） |
 | `EMBEDDING_PROVIDER` | `local`（镜像没装 torch，会自动降级，见第五节） |
 | `DB_ECHO` | `false` |
+
+> **在 Git Bash 里设 `DATA_DIR` 要小心。** MSYS 会把 `/data` 当成路径改写成
+> `C:/Program Files/Git/data`，变量就废了。要么加 `MSYS_NO_PATHCONV=1`，
+> 要么直接用 PowerShell / 网页控制台设。设完 `railway variables` 核对一眼。
 
 > **不要设 `VITE_API_URL`。** 单服务下前端和 API 同源，前端默认用相对路径 `/api`。
 > 设了反而会把绝对地址写死进 JS。
@@ -105,14 +149,22 @@ python -c "import secrets; print(secrets.token_urlsafe(48))"
 服务第一次起来就把 23 张表建好。
 
 **演示账号要手动造一次**（注册接口只会建学生账号，管理员/家长只能脚本建）。
-最省事的办法是在本地直接连线上库：
+
+数据库在 Railway 私有网络里，本地连不上，所以直接在容器里跑：
 
 ```bash
-cd backend
-DATABASE_URL="<Neon 直连串>" \
-DEMO_ADMIN_PASSWORD="换成一个强密码" \
-DEMO_PARENT_PASSWORD="换成一个强密码" \
-python scripts/seed_demo_accounts.py
+railway ssh -s <服务名> -- sh -c \
+  'DEMO_ADMIN_PASSWORD="换成一个强密码" \
+   DEMO_PARENT_PASSWORD="换成一个强密码" \
+   python scripts/seed_demo_accounts.py'
+```
+
+首次用 `railway ssh` 会提示没有密钥，按顺序做一次即可：
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ""
+railway ssh keys add -k id_ed25519        # 传私钥文件名/注释，会自动找同名 .pub
+ssh-keyscan ssh.railway.com >> ~/.ssh/known_hosts   # 否则 Host key verification failed
 ```
 
 脚本幂等，重复跑只更新密码和角色。
@@ -193,6 +245,25 @@ UI_BASE=https://你的域名 UI_EMAIL=xx UI_PASSWORD=xx node scripts/single_serv
 ```bash
 cd backend && alembic init migrations && alembic revision --autogenerate -m "init"
 ```
+
+### 4. 挂载卷的权限要自己修（踩过）
+
+平台把持久卷挂到 `/data` 时，**挂载点是 root 拥有的**，会盖掉镜像里
+`RUN chown -R appuser:appuser /data` 的结果。镜像里如果最后是 `USER appuser`，
+启动就会死在 import 阶段：
+
+```
+PermissionError: [Errno 13] Permission denied: '/data/uploads'
+```
+
+表现是 Railway 里部署状态显示 SUCCESS，但访问域名一律 502。
+
+所以镜像用 `backend/entrypoint.sh` 作入口：以 root 起 → `mkdir -p` 数据目录 →
+`chown -R appuser:appuser /data` → `exec gosu appuser uvicorn ...`。
+既保住非 root 运行，又不依赖平台挂卷的具体实现。
+
+> 同类问题在 Render / Fly 上一样会出现。判断方法：看运行时日志里有没有
+> `PermissionError`，而不是只看平台给的状态颜色。
 
 ---
 
