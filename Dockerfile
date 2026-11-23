@@ -80,8 +80,10 @@ RUN mkdir -p /data/uploads /data/storage/resumes /app/.cache/huggingface \
 EXPOSE 8000
 
 # 云平台会注入 $PORT，本地不加也能起
+# 打 /api/health 而不是 /：根路径只返回 index.html，数据库挂了它照样 200，
+# 这种健康检查等于没有。/api/health 会真的查一次库，不通时返回 503。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-    CMD curl -fsS "http://127.0.0.1:${PORT:-8000}/" || exit 1
+    CMD curl -fsS "http://127.0.0.1:${PORT:-8000}/api/health" || exit 1
 
 # 入口脚本以 root 起：修正 /data 属主 → gosu 降权到 appuser 跑 uvicorn。
 # --proxy-headers：Render / Railway / Fly 都在前面挡了一层反代，不加的话

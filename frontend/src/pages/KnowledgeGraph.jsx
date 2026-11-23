@@ -2,7 +2,9 @@ import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { Card, Form, Input, Button, Empty, Typography, Tag, message, Modal, Alert } from 'antd';
 import { SearchOutlined } from '@ant-design/icons';
 import { agentService, API_URL } from '../services/api';
-import { Graph } from '@antv/g6';
+// 注意：@antv/g6 不在这里静态导入。它有 1.3MB（gzip 后 392KB），
+// 静态 import 会把它算进本页首包，学生用手机打开要白等好几秒。
+// 改成在下面真正要渲染图谱时动态 import，构建时会自动拆成独立分块。
 
 const { Title, Paragraph } = Typography;
 
@@ -23,11 +25,18 @@ const KnowledgeGraph = () => {
     // If we have no data, don't try to render
     if (!graphData || !g6Ref.current) return;
     
-    // Cleanup previous graph instance
-    if (graphRef.current) {
-      graphRef.current.destroy();
-      graphRef.current = null;
-    }
+    let cancelled = false;
+
+    const render = async () => {
+      const { Graph } = await import('@antv/g6');
+      // 分块加载是异步的：等它回来时组件可能已经卸载或换了数据，必须再确认一次
+      if (cancelled || !g6Ref.current) return;
+
+      // Cleanup previous graph instance
+      if (graphRef.current) {
+        graphRef.current.destroy();
+        graphRef.current = null;
+      }
 
     const width = g6Ref.current.clientWidth || 800;
     const height = g6Ref.current.clientHeight || 520;
@@ -94,8 +103,17 @@ const KnowledgeGraph = () => {
       }
     }
 
-    return () => { 
-      if (graphRef.current) { 
+    };
+
+    render().catch((err) => {
+      // 分块下载失败（弱网、被拦截）时给出可理解的提示，别留白屏
+      console.error('G6 Load Error:', err);
+      messageApi.error('图谱组件加载失败，请刷新重试');
+    });
+
+    return () => {
+      cancelled = true;
+      if (graphRef.current) {
         try {
           graphRef.current.destroy(); 
         } catch {}

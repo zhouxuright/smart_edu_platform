@@ -6,7 +6,7 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
@@ -233,6 +233,33 @@ def _spa_file(path: Path) -> FileResponse:
     if name.endswith(".webmanifest"):
         media = "application/manifest+json"
     return FileResponse(path, media_type=media, headers=headers)
+
+
+@app.get("/api/health", include_in_schema=False)
+async def health():
+    """平台健康检查。
+
+    为什么要真的查一次库：如果只返回 200，数据库挂了它照样是绿的，
+    这个接口就等于没有。这里跑一条 SELECT 1，3 秒超时；
+    库不通时返回 503，让平台把实例判定为不健康。
+
+    故意不放在 /api 的鉴权路由里：健康检查不带 token。
+    """
+    database_ok = False
+    detail = "ok"
+    try:
+        async with AsyncSessionLocal() as session:
+            await asyncio.wait_for(session.execute(text("SELECT 1")), timeout=3)
+        database_ok = True
+    except Exception as error:  # noqa: BLE001 - 健康检查要吞掉所有异常并如实报告
+        detail = f"{type(error).__name__}: {error}"[:200]
+
+    payload = {
+        "status": "ok" if database_ok else "degraded",
+        "database": database_ok,
+        "detail": detail,
+    }
+    return JSONResponse(payload, status_code=200 if database_ok else 503)
 
 
 @app.get("/")
