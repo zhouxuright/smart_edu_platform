@@ -308,6 +308,50 @@ PermissionError: [Errno 13] Permission denied: '/data/uploads'
 会先失败，进程根本起不来，这时候健康检查也没机会返回 503；所以它覆盖的是
 「启动后数据库掉线」这一类问题。
 
+### 5.3 成本怎么看
+
+配额按**次数**限制（`LLM_DAILY_QUOTA`），但钱是按 **token** 花的。
+两者记在同一张 `llm_usage` 表、同一行（用户 + 日期）：
+
+- `count` —— 调用次数，由 `services/quota.py` 维护，用于限额；
+- `prompt_tokens` / `completion_tokens` —— 成本，由 `services/llm_usage.py` 维护。
+
+采集是非侵入的，业务代码不需要写任何计量语句：httpx 直连走 response hook，
+LangChain 走 callback，流式走 `parse_chunk`。三条路径都覆盖了。
+
+**看报表：**
+
+```bash
+cd backend && python scripts/llm_cost_report.py --days 30
+```
+
+默认只报 token 数，不报金额。要算钱，配两个环境变量（单位：元 / 百万 token）：
+
+```bash
+LLM_PRICE_INPUT_PER_M=2.0
+LLM_PRICE_OUTPUT_PER_M=8.0
+```
+
+数值按实际合同价填。**不要把供应商报价写死在代码里**——调价很频繁，
+写死就等于埋了一个会过期的数据源。
+
+报表末尾有「计量自检」：`count > 0` 但 `total_tokens = 0` 的记录会列出来。
+早于本功能上线的历史数据会命中，属正常；**上线之后**新产生的命中就说明有漏记，
+需要查对应接口。
+
+### 5.4 `create_all` 的两个盲区
+
+`create_all` 只建表，**不给已存在的表补索引，也不给已存在的表补列**。
+所以模型里加 `index=True` 或加新字段，线上库纹丝不动，跑起来就是慢查询或
+`UndefinedColumn`。
+
+`core/indexes.py` 用幂等 DDL 兜住这两件事（`CREATE INDEX IF NOT EXISTS` /
+`ALTER TABLE ADD COLUMN IF NOT EXISTS`），启动时自动执行，新旧库都生效。
+
+需要新增索引或字段，加到那个文件的 `INDEXES` / `COLUMNS` 元组里，别只改模型。
+边界：它只覆盖**加列**。改类型、加约束、数据迁移仍然需要真正的迁移工具
+（长期应引入 Alembic）。
+
 ---
 
 ## 六、国内访问
