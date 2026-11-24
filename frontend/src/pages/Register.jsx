@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Card, Form, Input, Button, message } from 'antd';
+import { Card, Form, Input, Button, message, Radio, Typography } from 'antd';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { authService } from '../services/api';
 import { resolveAuthReturnPath } from '../services/mentorDraft';
@@ -14,7 +14,7 @@ const Register = () => {
   const onFinish = async (values) => {
     setLoading(true);
     try {
-      await authService.register(values.email, values.password, values.full_name);
+      await authService.register(values.email, values.password, values.full_name, values.role || 'student');
       // 注册后直接登录，避免多一次跳转把试用的人劝退
       try {
         await authService.login(values.email, values.password);
@@ -41,6 +41,13 @@ const Register = () => {
           onFinish={onFinish}
           layout="vertical"
         >
+          <Form.Item label="我是" name="role" initialValue="student">
+            <Radio.Group optionType="button" buttonStyle="solid">
+              <Radio.Button value="student">学生</Radio.Button>
+              <Radio.Button value="parent">家长</Radio.Button>
+            </Radio.Group>
+          </Form.Item>
+
           <Form.Item
             label="姓名"
             name="full_name"

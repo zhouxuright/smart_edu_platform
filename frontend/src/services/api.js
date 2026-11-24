@@ -63,8 +63,9 @@ export const authService = {
         }
         return response.data;
     },
-    register: async (email, password, full_name) => {
-        return await api.post('/register', { email, password, full_name });
+    // role 只允许 student / parent，后端会拒绝 admin 这类机构角色
+    register: async (email, password, full_name, role = 'student') => {
+        return await api.post('/register', { email, password, full_name, role });
     },
     logout: () => {
         localStorage.removeItem('token');
@@ -112,10 +113,14 @@ export const agentService = {
 
 export const dashboardService = {
     /**
-     * @returns {Promise<import('axios').AxiosResponse<any>>}
+     * @param {{signal?: AbortSignal, studentId?: number}} options
+     *   studentId 只在家长看孩子时传；学生传别人的 id 会被后端 scope 校验拦掉。
      */
-    getSummary: async (config) => {
-        return await api.get('/dashboard/summary', config);
+    getSummary: async ({ signal, studentId } = {}) => {
+        return await api.get('/dashboard/summary', {
+            signal,
+            ...(studentId ? { params: { student_id: studentId } } : {}),
+        });
     },
     /**
      * @param {{subject:string, topic:string, activity_type:string, score?:number}} payload
@@ -348,6 +353,35 @@ export const workflowService = {
     },
     list: async (kind) => {
         return await api.get('/agent/runs', { params: kind ? { kind } : undefined });
+    },
+};
+
+/**
+ * 家长-学生绑定。
+ *
+ * 授权方是学生：邀请码由学生生成，家长拿码绑定。这样「知道邮箱」不等于
+ * 「能看学情」，也让学生随时能在「谁在看我的数据」里撤销。
+ */
+export const parentLinkService = {
+    // 学生侧
+    createInvite: async () => {
+        return await api.post('/parent/invite', {});
+    },
+    viewers: async () => {
+        return await api.get('/parent/viewers');
+    },
+    revoke: async (parentId) => {
+        return await api.delete(`/parent/viewers/${parentId}`);
+    },
+    // 家长侧
+    children: async () => {
+        return await api.get('/parent/children');
+    },
+    bind: async (code) => {
+        return await api.post('/parent/link', { code });
+    },
+    unbind: async (studentId) => {
+        return await api.delete(`/parent/children/${studentId}`);
     },
 };
 

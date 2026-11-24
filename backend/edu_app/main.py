@@ -19,7 +19,7 @@ from edu_app.core.tenant_middleware import TenantContextMiddleware
 from edu_app.core.rate_limit import RateLimitMiddleware
 from edu_app.api import webrtc_agent, internship_plans, rag_documents, ui_events, applications, notifications, resumes, agent_runs
 # agent_chat 依赖 endpoints / applications，必须放在它们之后导入
-from edu_app.api import agent_chat
+from edu_app.api import agent_chat, parent_links
 # 导入即完成流程注册（jd_match 等），不需要在别处显式调用
 from edu_app import flows  # noqa: F401
 try:
@@ -159,6 +159,7 @@ app.include_router(notifications.router, prefix="/api")
 app.include_router(resumes.router, prefix="/api")
 app.include_router(agent_runs.router, prefix="/api")
 app.include_router(agent_chat.router, prefix="/api")
+app.include_router(parent_links.router, prefix="/api")
 
 # Mount static directory for uploads
 UPLOAD_DIR = str(settings.data_root / "uploads")

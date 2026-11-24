@@ -20,6 +20,7 @@ import json
 import secrets
 import string
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -84,6 +85,25 @@ def call_stream(base, path, token, body=None, timeout=90):
         return 0, "", str(e)
 
 
+def call_auth(base, path, body, retries=2):
+    """登录/注册有独立的限流（默认 10 次/分钟，按 IP）。
+
+    跑完一轮 E2E 会消耗其中一半，如果紧接着再跑就会撞 429。
+    撞了就等一会儿重试，而不是把它当成功能失败——那不是被测对象的问题。
+    """
+    code, data = call(base, "POST", path, None, body)
+    for _ in range(retries):
+        if code != 429:
+            break
+        wait = 20
+        if isinstance(data, dict):
+            wait = min(int(data.get("retry_after") or wait), 65)
+        print(f"      （限流 429，等待 {wait}s 后重试）")
+        time.sleep(wait)
+        code, data = call(base, "POST", path, None, body)
+    return code, data
+
+
 def rand(n=8):
     return "".join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(n))
 
@@ -99,11 +119,11 @@ def main() -> int:
     password = "Passw0rd!" + rand(6)
 
     # ---- 注册 / 登录 ----
-    code, body = call(base, "POST", "/api/register", body={
+    code, body = call_auth(base, "/api/register", {
         "email": email, "password": password, "full_name": "页面E2E", "role": "student",
     })
     check("注册", code == 200, f"HTTP {code}")
-    code, body = call(base, "POST", "/api/login", body={"email": email, "password": password})
+    code, body = call_auth(base, "/api/login", {"email": email, "password": password})
     token = (body or {}).get("access_token") if isinstance(body, dict) else None
     check("登录拿到 token", code == 200 and bool(token), f"HTTP {code}")
 
@@ -290,6 +310,68 @@ def main() -> int:
     ]:
         code, ctype, first = call_stream(base, path, token, body)
         check(f"角色隔离：学生访问{label}被拒", code == 403, f"HTTP {code}")
+
+    # ---- 12. 家长绑定全链路 ----
+    # 这一段是「家长门户到底能不能用」的真正答案：
+    # 学生生成邀请码 → 家长绑定 → 家长看孩子的数据 → 学生撤销 → 家长立刻失去权限。
+    parent_email = f"e2e_parent_{rand()}@example.com"
+    code, body = call_auth(base, "/api/register", {
+        "email": parent_email, "password": password, "full_name": "E2E家长", "role": "parent",
+    })
+    check("家长：可自助注册家长账号", code == 200, f"HTTP {code}")
+    code, body = call_auth(base, "/api/login", {"email": parent_email, "password": password})
+    parent_token = (body or {}).get("access_token") if isinstance(body, dict) else None
+    check("家长：登录", code == 200 and bool(parent_token), f"HTTP {code}")
+
+    code, body = call_auth(base, "/api/register", {
+        "email": f"e2e_admin_{rand()}@example.com", "password": password,
+        "full_name": "想自封管理员", "role": "admin",
+    })
+    check("注册：不允许自封 admin", code == 400, f"HTTP {code}")
+
+    if parent_token:
+        code, body = call(base, "GET", "/api/parent/children", parent_token)
+        check("家长：绑定前孩子列表为空", code == 200 and not (body or {}).get("items"),
+              f"HTTP {code}")
+
+        code, body = call(base, "POST", "/api/parent/invite", token, {})
+        invite_code = (body or {}).get("code") if isinstance(body, dict) else None
+        check("学生：生成邀请码", code == 200 and bool(invite_code), f"HTTP {code}")
+
+        if invite_code:
+            code, body = call(base, "POST", "/api/parent/link", parent_token, {"code": invite_code})
+            check("家长：用码绑定孩子", code == 200 and (body or {}).get("linked"), f"HTTP {code}")
+
+            code, body = call(base, "POST", "/api/parent/link", parent_token, {"code": invite_code})
+            check("邀请码一次性（重复使用被拒）", code == 409, f"HTTP {code}")
+
+            code, body = call(base, "GET", "/api/parent/children", parent_token)
+            kids = (body or {}).get("items") or []
+            check("家长：孩子列表出现 1 个", len(kids) == 1, f"HTTP {code}, {len(kids)} 个")
+            child_id = kids[0]["student_id"] if kids else None
+
+            if child_id:
+                code, body = call(base, "GET", f"/api/dashboard/summary?student_id={child_id}", parent_token)
+                # 关键断言：拿到的是孩子的数据，不是家长自己的空数据
+                check("家长：仪表盘显示孩子的数据", code == 200 and (body or {}).get("student_id") == child_id,
+                      f"HTTP {code}, name={(body or {}).get('name')}")
+
+                code, ctype, first = call_stream(base, "/api/agent/parent/stream", parent_token,
+                                                 {"student_id": child_id})
+                check("家长：能生成孩子报告", code == 200 and bool(first.strip()), f"HTTP {code}")
+
+                code, body = call(base, "GET", "/api/parent/viewers", token)
+                viewers = (body or {}).get("items") or []
+                check("学生：能看到谁在看自己的学情", code == 200 and len(viewers) == 1,
+                      f"HTTP {code}, {len(viewers)} 人")
+
+                if viewers:
+                    parent_id = viewers[0]["parent_id"]
+                    code, body = call(base, "DELETE", f"/api/parent/viewers/{parent_id}", token)
+                    check("学生：撤销家长权限", code == 200, f"HTTP {code}")
+
+                    code, body = call(base, "GET", f"/api/dashboard/summary?student_id={child_id}", parent_token)
+                    check("撤销后家长立即失去访问", code == 403, f"HTTP {code}")
 
     print(f"\n通过 {PASS}，失败 {FAIL}")
     if FAILED:

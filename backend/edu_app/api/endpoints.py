@@ -291,23 +291,22 @@ async def require_llm_quota(current_user: User = Depends(get_current_user)):
     await quota_service.consume_quota(current_user)
     return True
 
-def ensure_student_scope(current_user: User, student_id) -> int:
-    """校验 student_id 的访问权：只能看自己，管理员可看全部。
+# 学情访问范围校验搬到 services/scope.py 了：家长绑定上线后它要查库，
+# 而新加的 api/parent_links.py 也要用它，留在本文件会形成循环 import。
+from edu_app.services.scope import ensure_student_scope  # noqa: E402
 
-    学生账号不得读取他人学情；家长与学生的绑定关系尚未建模，
-    因此除 admin 外一律按本人处理，越权返回 403 而不是 404，便于排查。
+async def _student_display_name(db: AsyncSession, student_id: int, current_user: User) -> str:
+    """报告里该写谁的名字。
+
+    原来四处都是 `student_name = current_user.full_name`，只有「学生没有档案」
+    时才去查目标用户。结果家长看孩子的报告，标题写的是**家长自己的名字**——
+    因为学生一建档案，就走不到那个分支了。取名字和有没有档案无关，直接查人。
     """
-    if student_id is None:
-        raise HTTPException(status_code=400, detail="缺少 student_id")
-    try:
-        target_id = int(student_id)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="student_id 不合法")
-    if getattr(current_user, "role", "student") == "admin":
-        return target_id
-    if target_id != current_user.id:
-        raise HTTPException(status_code=403, detail="无权访问该学生的数据")
-    return target_id
+    if student_id == current_user.id:
+        return current_user.full_name or current_user.email
+    target = (await db.execute(select(User).where(User.id == student_id))).scalars().first()
+    return (target.full_name or target.email) if target else f"学生#{student_id}"
+
 
 # 认证与用户
 @router.post("/register", response_model=schemas.UserResponse)
@@ -317,8 +316,19 @@ async def register(user: schemas.UserCreate, db: AsyncSession = Depends(get_db))
         raise HTTPException(status_code=400, detail="邮箱已被注册")
     
     hashed_password = await auth.get_password_hash_async(user.password)
-    # Public sign-ups are individual student accounts. Organization roles are provisioned separately.
-    new_user = User(email=user.email, hashed_password=hashed_password, full_name=user.full_name, role="student", tenant_id=None)
+    # 公开注册只能选 student / parent。
+    # 家长必须是能自助注册的，否则家长门户永远只有演示账号能用；
+    # 但 admin / teacher 属于机构角色，必须由后台开通，不能让注册接口自封。
+    requested_role = (getattr(user, "role", None) or "student").strip().lower()
+    if requested_role not in ("student", "parent"):
+        raise HTTPException(status_code=400, detail="角色只能是 student 或 parent")
+    new_user = User(
+        email=user.email,
+        hashed_password=hashed_password,
+        full_name=user.full_name,
+        role=requested_role,
+        tenant_id=None,
+    )
     db.add(new_user)
     await db.commit()
     await db.refresh(new_user)
@@ -830,19 +840,13 @@ async def assessment_agent_websocket(websocket: WebSocket):
                 
                 # Default to current user if student_id not provided
                 try:
-                    student_id = ensure_student_scope(current_user, data.get("student_id") or current_user.id)
+                    student_id = await ensure_student_scope(db, current_user, data.get("student_id") or current_user.id)
                 except HTTPException as scope_error:
                     await websocket.send_text(json.dumps({"error": "forbidden", "detail": scope_error.detail}))
                     await websocket.send_text("[DONE]")
                     continue
                 
-                # Fetch student name
-                student_name = current_user.full_name
-                if student_id != current_user.id:
-                     u_res = await db.execute(select(User).where(User.id == student_id))
-                     target_user = u_res.scalars().first()
-                     if target_user:
-                         student_name = target_user.full_name
+                student_name = await _student_display_name(db, student_id, current_user)
                 
                 # Fetch learning records
                 result = await db.execute(select(LearningRecord).where(LearningRecord.user_id == student_id).order_by(LearningRecord.timestamp.desc()).limit(10))
@@ -903,18 +907,13 @@ async def parent_agent_websocket(websocket: WebSocket):
                     continue
                 
                 try:
-                    student_id = ensure_student_scope(current_user, data.get("student_id") or current_user.id)
+                    student_id = await ensure_student_scope(db, current_user, data.get("student_id") or current_user.id)
                 except HTTPException as scope_error:
                     await websocket.send_text(json.dumps({"error": "forbidden", "detail": scope_error.detail}))
                     await websocket.send_text("[DONE]")
                     continue
 
-                student_name = current_user.full_name
-                if student_id != current_user.id:
-                    u_res = await db.execute(select(User).where(User.id == student_id))
-                    target_user = u_res.scalars().first()
-                    if target_user:
-                        student_name = target_user.full_name
+                student_name = await _student_display_name(db, student_id, current_user)
                 
                 result = await db.execute(select(LearningRecord).where(LearningRecord.user_id == student_id).order_by(LearningRecord.timestamp.desc()).limit(10))
                 records = result.scalars().all()
@@ -1045,21 +1044,10 @@ async def collaborative_agent_websocket(websocket: WebSocket):
 
 @router.post("/agent/assessment/stream")
 async def assessment_agent_stream(request: schemas.AssessmentRequest, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
-    ensure_student_scope(current_user, request.student_id)
-    # 获取学生档案或用户信息
+    await ensure_student_scope(db, current_user, request.student_id)
     result = await db.execute(select(StudentProfile).where(StudentProfile.user_id == request.student_id))
     profile = result.scalars().first()
-    student_name = current_user.full_name
-    if profile:
-         # 可以从profile获取更多信息，这里暂取User名字
-         pass
-    else:
-        # 如果不是查自己，且没有profile，可能需要从User表查名字
-        if request.student_id != current_user.id:
-             u_res = await db.execute(select(User).where(User.id == request.student_id))
-             target_user = u_res.scalars().first()
-             if target_user:
-                 student_name = target_user.full_name
+    student_name = await _student_display_name(db, request.student_id, current_user)
 
     # 获取学习记录
     result = await db.execute(select(LearningRecord).where(LearningRecord.user_id == request.student_id).order_by(LearningRecord.timestamp.desc()).limit(10))
@@ -1148,18 +1136,11 @@ async def collaborative_agent_stream(request: schemas.CollaborativeRequest, curr
 
 @router.post("/agent/parent/stream")
 async def parent_agent_stream(request: schemas.ParentReportRequest, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
-    ensure_student_scope(current_user, request.student_id)
-    # 获取学生档案或用户信息
+    # 家长门户只对家长/老师开放：学生传自己的 id 也不该拿到一份「家长报告」
+    await ensure_student_scope(db, current_user, request.student_id, require_roles=("parent", "teacher"))
     result = await db.execute(select(StudentProfile).where(StudentProfile.user_id == request.student_id))
     profile = result.scalars().first()
-    student_name = current_user.full_name
-    if not profile:
-        # 如果没有档案，尝试创建或只是获取名字
-        if request.student_id != current_user.id:
-            u_res = await db.execute(select(User).where(User.id == request.student_id))
-            target_user = u_res.scalars().first()
-            if target_user:
-                student_name = target_user.full_name
+    student_name = await _student_display_name(db, request.student_id, current_user)
     
     # 获取学习记录
     result = await db.execute(select(LearningRecord).where(LearningRecord.user_id == request.student_id).order_by(LearningRecord.timestamp.desc()).limit(10))
@@ -1343,7 +1324,7 @@ async def knowledge_agent(request: schemas.KnowledgeRequest, db: AsyncSession = 
 
 @router.post("/agent/assessment")
 async def assessment_agent(request: schemas.AssessmentRequest, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
-    ensure_student_scope(current_user, request.student_id)
+    await ensure_student_scope(db, current_user, request.student_id)
     # 获取学习记录
     result = await db.execute(select(LearningRecord).where(LearningRecord.user_id == request.student_id))
     records = result.scalars().all()
@@ -1388,7 +1369,7 @@ async def collaborative_agent(request: schemas.CollaborativeRequest, current_use
 
 @router.post("/agent/parent")
 async def parent_agent(request: schemas.ParentReportRequest, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
-    ensure_student_scope(current_user, request.student_id)
+    await ensure_student_scope(db, current_user, request.student_id, require_roles=("parent", "teacher"))
     # 与学习评估类似，获取学习记录
     result = await db.execute(select(LearningRecord).where(LearningRecord.user_id == request.student_id))
     records = result.scalars().all()
@@ -1492,9 +1473,19 @@ def _schedule_dashboard_recommendations(user_id: int, full_name: str, record_cou
 
 
 @router.get("/dashboard/summary")
-async def dashboard_summary(db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+async def dashboard_summary(
+    student_id: int | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """仪表盘概览。
+
+    `student_id` 让家长能看已绑定的孩子。不传就是看自己——
+    学生传别人的 id 会被 scope 校验拦掉，所以这个参数不是越权口子。
+    """
+    target_id = await ensure_student_scope(db, current_user, student_id or current_user.id)
     since = datetime.now(UTC) - timedelta(days=14)
-    result = await db.execute(select(LearningRecord).where(LearningRecord.user_id == current_user.id))
+    result = await db.execute(select(LearningRecord).where(LearningRecord.user_id == target_id))
     records = result.scalars().all()
 
     def norm_ts(ts):
@@ -1550,21 +1541,22 @@ async def dashboard_summary(db: AsyncSession = Depends(get_db), current_user: Us
     # 推荐行动要调模型，但不能在请求路径里等：冷缓存时用户看到的就是首屏一直转圈。
     # 改成「有旧的就先用旧的，没有就先用上面算出来的规则版兜底」，同时后台生成，
     # 下次打开就是模型版。用户永远不用等模型。
-    cached_rec = DASHBOARD_REC_CACHE.get(current_user.id)
+    # 缓存按**被查看的学生**为键：家长和孩子看同一份学情，该命中同一条缓存
+    cached_rec = DASHBOARD_REC_CACHE.get(target_id)
     if cached_rec and cached_rec[1]:
         recommendations = cached_rec[1]
         if (datetime.now(UTC).timestamp() - cached_rec[0]) >= DASHBOARD_REC_TTL:
-            _schedule_dashboard_recommendations(current_user.id, current_user.full_name, len(records))
+            _schedule_dashboard_recommendations(target_id, await _student_display_name(db, target_id, current_user), len(records))
     else:
-        _schedule_dashboard_recommendations(current_user.id, current_user.full_name, len(records))
-
+        _schedule_dashboard_recommendations(target_id, await _student_display_name(db, target_id, current_user), len(records))
 
     # Get mistakes count
-    m_result = await db.execute(select(MistakeRecord).where(MistakeRecord.user_id == current_user.id))
+    m_result = await db.execute(select(MistakeRecord).where(MistakeRecord.user_id == target_id))
     mistakes_count = len(m_result.scalars().all())
 
     return {
-        "name": current_user.full_name,
+        "name": await _student_display_name(db, target_id, current_user),
+        "student_id": target_id,
         "mistakes_count": mistakes_count,
         "active_courses": active_courses,
         "study_hours": round(study_hours, 1),
