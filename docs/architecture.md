@@ -14,7 +14,7 @@
 
 | 维度 | 当前值 | 来源 |
 | --- | --- | --- |
-| 形态 | 单体 FastAPI，81 个路由 | `grep -c "@router"` |
+| 形态 | 单体 FastAPI，92 个路由 | `grep -c "@router"`（2026-11-23） |
 | 进程 | `uvicorn --workers 1` | `backend/entrypoint.sh` |
 | 副本 | `numReplicas: 1` | `railway.json` |
 | 中间件 | 无 Redis、无消息队列、无 Celery | `requirements.txt` 无相关依赖 |
@@ -253,3 +253,5 @@ Web 已有 PWA manifest 和 Service Worker，能装到桌面和手机主屏，�
 - **准备加副本**：看第五节，按那个顺序做，别跳步。
 - **决定下一个功能做什么**：看第六节。
 - **要开始收钱**：看第九节，先补合规和计费。
+- **要动 Agent 运行时（记忆 / 工作流 / HITL / Skill / MCP）**：看 `agent-runtime.md`，
+  那份是这份的下一层，讲「单进程内部怎么组织」，同样按触发条件写。

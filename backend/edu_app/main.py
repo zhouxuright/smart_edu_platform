@@ -14,12 +14,14 @@ from edu_app.api import endpoints
 from edu_app.core.database import engine, Base, AsyncSessionLocal
 from edu_app.core.indexes import ensure_indexes, ensure_columns
 from sqlalchemy import text
-from edu_app.models import user, learning, saas, plan, job, notification, resume, agent  # 导入模型以完成注册
+from edu_app.models import user, learning, saas, plan, job, notification, resume, agent, memory, workflow  # noqa: F401 导入模型以完成注册
 from edu_app.core.tenant_middleware import TenantContextMiddleware
 from edu_app.core.rate_limit import RateLimitMiddleware
-from edu_app.api import webrtc_agent, internship_plans, rag_documents, ui_events, applications, notifications, resumes
+from edu_app.api import webrtc_agent, internship_plans, rag_documents, ui_events, applications, notifications, resumes, agent_runs
 # agent_chat 依赖 endpoints / applications，必须放在它们之后导入
 from edu_app.api import agent_chat
+# 导入即完成流程注册（jd_match 等），不需要在别处显式调用
+from edu_app import flows  # noqa: F401
 try:
     from prometheus_fastapi_instrumentator import Instrumentator
 except Exception:
@@ -35,9 +37,10 @@ from sqlalchemy.future import select
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # create_all 只建表：不给已有表补索引，也不给已有表补列，所以单独补一遍（幂等）
-        await ensure_indexes(conn)
+        # create_all 只建表：不给已有表补索引，也不给已有表补列，所以单独补一遍（幂等）。
+        # 顺序必须是先列后索引——新索引可能引用新列，反过来会报 column does not exist。
         await ensure_columns(conn)
+        await ensure_indexes(conn)
     task = None
 
     # 预热 BGE-M3：首次加载约 10-20 秒，放到后台线程，避免第一个上传请求干等
@@ -97,11 +100,19 @@ async def lifespan(app: FastAPI):
     reminder_stop = asyncio.Event()
     reminder_task = asyncio.create_task(reminder_loop(reminder_stop))
 
+    # 会话归档：闲置 30 分钟或满 20 轮，生成摘要 + 长期记忆。
+    # 放在进程内循环而不是 broker：每 10 分钟扫一次，量级远达不到需要队列
+    from edu_app.services.memory import archive_loop
+
+    memory_stop = asyncio.Event()
+    memory_task = asyncio.create_task(archive_loop(memory_stop))
+
     try:
         yield
     finally:
         reminder_stop.set()
-        for t in (task, reminder_task):
+        memory_stop.set()
+        for t in (task, reminder_task, memory_task):
             try:
                 t.cancel()
             except Exception:
@@ -137,6 +148,7 @@ app.include_router(ui_events.router, prefix="/api")
 app.include_router(applications.router, prefix="/api")
 app.include_router(notifications.router, prefix="/api")
 app.include_router(resumes.router, prefix="/api")
+app.include_router(agent_runs.router, prefix="/api")
 app.include_router(agent_chat.router, prefix="/api")
 
 # Mount static directory for uploads

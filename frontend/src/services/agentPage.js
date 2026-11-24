@@ -16,6 +16,8 @@ const PAGE_BY_PATH = [
   [/^\/parent/, 'parent'],
   // 只匹配 /knowledge 本身与它的子路径，别把 /knowledge-extraction 也吞进来
   [/^\/knowledge(?:\/|$)/, 'knowledge'],
+  [/^\/jd-match/, 'jd-match'],
+  [/^\/mock-interview/, 'mock-interview'],
   [/^\/dashboard/, 'dashboard'],
 ];
 
@@ -26,6 +28,8 @@ export const PAGE_LABEL = {
   'mistake-book': '错题本',
   parent: '家长门户',
   knowledge: '知识图谱',
+  'jd-match': 'JD 匹配',
+  'mock-interview': '模拟面试',
   dashboard: '仪表盘',
   other: '启程 AI',
 };

@@ -14,6 +14,14 @@
 边界要说清楚：这只覆盖**加列**。改类型、加约束、数据迁移仍然需要真正的迁移工具，
 别把它当 Alembic 用。
 
+**执行顺序是「先列后索引」**，不能反过来：新加的索引可能引用新加的列，
+先建索引会报 `column does not exist`。
+
+**每条 DDL 各自包一层 savepoint。** PostgreSQL 里一条语句失败会把整个事务
+标记为 aborted，之后所有语句都报 `InFailedSQLTransactionError`——不包
+savepoint 的话，第一条失败就等于剩下全部静默失败，而日志里只有一行 warning，
+看起来像「只有那一条出问题」。
+
 表名、列名、索引名全是本文件里的常量，不来自外部输入，不存在注入风险。
 """
 from __future__ import annotations
@@ -31,6 +39,8 @@ INDEXES: tuple[tuple[str, str, str], ...] = (
     ("ix_mistake_records_user_created", "mistake_records", "(user_id, created_at DESC)"),
     # 薄弱点、Agent 读错题：WHERE user_id = ? AND is_resolved = 0
     ("ix_mistake_records_user_resolved", "mistake_records", "(user_id, is_resolved)"),
+    # 工作流恢复：按 run_id 找回挂在这个流程上的提案
+    ("ix_agent_proposals_run_id", "agent_proposals", "(run_id)"),
 )
 
 # (表, 列, 列定义)。只用于「新增字段」，已有字段的默认值回填靠 DEFAULT 子句。
@@ -43,6 +53,10 @@ COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("users", "tenant_id", "VARCHAR"),
     ("documents", "tenant_id", "VARCHAR"),
     ("documents", "owner_id", "INTEGER"),
+    # 提案挂到工作流上：没有这两列，流程里的确认点就只能当独立提案处理，
+    # 用户点完「应用」流程永远停在 awaiting_human
+    ("agent_proposals", "run_id", "VARCHAR(36)"),
+    ("agent_proposals", "step", "VARCHAR(40)"),
 )
 
 
@@ -50,14 +64,16 @@ async def ensure_indexes(conn) -> list[str]:
     """在已建好的连接上补索引，返回成功执行的索引名。
 
     单个索引失败不该拖垮启动：线上锁表、权限不足都可能让 CREATE INDEX 报错，
-    而索引缺失只会慢，不会让服务不可用。
+    而索引缺失只会慢，不会让服务不可用。每条各自包 savepoint，
+    避免一条失败连带后面全部失败（见文件头）。
     """
     done: list[str] = []
     for name, table, columns in INDEXES:
         try:
-            await conn.execute(
-                text(f"CREATE INDEX IF NOT EXISTS {name} ON {table} {columns}")
-            )
+            async with conn.begin_nested():
+                await conn.execute(
+                    text(f"CREATE INDEX IF NOT EXISTS {name} ON {table} {columns}")
+                )
             done.append(name)
         except Exception as error:  # noqa: BLE001 - 启动阶段不能因为索引失败就崩
             logger.warning("补索引 %s 失败（表 %s）：%s", name, table, error)
@@ -75,9 +91,10 @@ async def ensure_columns(conn) -> list[str]:
     done: list[str] = []
     for table, column, ddl in COLUMNS:
         try:
-            await conn.execute(
-                text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {ddl}")
-            )
+            async with conn.begin_nested():
+                await conn.execute(
+                    text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {ddl}")
+                )
             done.append(f"{table}.{column}")
         except Exception as error:  # noqa: BLE001
             logger.warning("补列 %s.%s 失败：%s", table, column, error)

@@ -14,6 +14,8 @@ import {
   ExperimentOutlined,
   SendOutlined,
   FileTextOutlined,
+  AimOutlined,
+  AudioOutlined,
 } from '@ant-design/icons';
 import { useNavigate, Outlet, useLocation } from 'react-router-dom';
 import { authService } from '../services/api';
@@ -88,6 +90,20 @@ export const MENU_ITEMS = [
     group: '求职',
   },
   {
+    key: '/jd-match',
+    icon: <AimOutlined />,
+    label: 'JD 匹配',
+    roles: ['student', 'admin'],
+    group: '求职',
+  },
+  {
+    key: '/mock-interview',
+    icon: <AudioOutlined />,
+    label: '模拟面试',
+    roles: ['student', 'admin'],
+    group: '求职',
+  },
+  {
     key: '/applications',
     icon: <SendOutlined />,
     label: '投递看板',
@@ -149,6 +165,8 @@ const PAGE_TITLE = {
   '/rag': '企业知识库',
   '/applications': '投递看板',
   '/resume': '简历工作台',
+  '/jd-match': 'JD 匹配',
+  '/mock-interview': '模拟面试',
   '/assessment': '学习评估',
   '/collaborative': '协作学习',
   '/parent': '家长门户',

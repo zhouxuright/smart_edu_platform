@@ -28,8 +28,18 @@ class AgentProposal(Base):
     summary = Column(Text, nullable=True)
     preview = Column(JSONB, nullable=True)
 
-    # pending / applied / rejected / expired
+    # pending / applying / applied / rejected / expired
+    # `applying` 是执行期间的中转态：两个人同时点「应用」时，只有抢到这一步的
+    # 那个请求会真正执行，另一个直接拿到 409，不会把同一个写操作做两遍。
     status = Column(String(16), nullable=False, default="pending", index=True)
+
+    # 挂在工作流上的提案。为空表示这是一次独立对话里产生的提案，
+    # 确认与否都不影响任何流程。
+    #
+    # 为什么要记 step：同一个 run 可能有多个确认点（面试第 1 题、第 3 题、
+    # 最后提议改简历），恢复时得知道用户确认的是哪一个。
+    run_id = Column(String(36), nullable=True, index=True)
+    step = Column(String(40), nullable=True)
 
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     applied_at = Column(DateTime(timezone=True), nullable=True)

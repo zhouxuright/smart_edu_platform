@@ -18,6 +18,8 @@ const KnowledgeExtraction = lazy(() => import('./pages/KnowledgeExtraction'));
 const InternshipPlan = lazy(() => import('./pages/InternshipPlan'));
 const Applications = lazy(() => import('./pages/Applications'));
 const ResumeStudio = lazy(() => import('./pages/ResumeStudio'));
+const JdMatch = lazy(() => import('./pages/JdMatch'));
+const MockInterview = lazy(() => import('./pages/MockInterview'));
 
 const PrivateRoute = () => {
   const { pathname, search } = useLocation();
@@ -50,6 +52,8 @@ function App() {
               <Route path="rag" element={<EnterpriseRAG />} />
               <Route path="applications" element={<Applications />} />
               <Route path="resume" element={<ResumeStudio />} />
+              <Route path="jd-match" element={<JdMatch />} />
+              <Route path="mock-interview" element={<MockInterview />} />
               <Route path="assessment" element={<Assessment />} />
               <Route path="collaborative" element={<Collaborative />} />
               <Route path="parent" element={<ParentPortal />} />

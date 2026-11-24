@@ -302,19 +302,52 @@ export const resumeService = {
  * 提案必须经过 confirm 才会落库——这就是「用户点头之前不改数据」的那道闸。
  */
 export const pageAgentService = {
-    chat: async ({ page, pageId, message, history }) => {
+    chat: async ({ page, pageId, message, history, sessionId }) => {
         return await api.post('/agent/chat', {
             page,
             page_id: pageId ?? null,
             message,
+            // 老前端字段保留一轮：服务端只在「新会话且没有历史」时才用它
             history: (history || []).slice(-6),
+            session_id: sessionId || null,
         }, { timeout: 120000 });
+    },
+    history: async (sessionId) => {
+        return await api.get('/agent/chat/history', { params: { session_id: sessionId } });
     },
     confirm: async (proposalId, accept) => {
         return await api.post('/agent/chat/confirm', { proposal_id: proposalId, accept });
     },
     tools: async (page) => {
         return await api.get('/agent/chat/tools', { params: { page } });
+    },
+};
+
+export const workflowService = {
+    flows: async () => {
+        return await api.get('/agent/flows');
+    },
+    // 默认一次推进最多 6 步：JD 匹配 4 步，一次请求走完
+    start: async (kind, input) => {
+        return await api.post('/agent/runs', { kind, input, max_steps: 6 }, { timeout: 180000 });
+    },
+    get: async (id) => {
+        return await api.get(`/agent/runs/${id}`);
+    },
+    advance: async (id) => {
+        return await api.post(`/agent/runs/${id}/advance`, {}, { timeout: 120000 });
+    },
+    // payload 只在多轮流程（模拟面试）用：用户这一轮的回答随确认一起提交。
+    // 单步确认（JD 匹配、改简历提案）不传。
+    resume: async (id, accept, payload) => {
+        return await api.post(
+            `/agent/runs/${id}/resume`,
+            { accept, ...(payload ? { payload } : {}) },
+            { timeout: 180000 },
+        );
+    },
+    list: async (kind) => {
+        return await api.get('/agent/runs', { params: kind ? { kind } : undefined });
     },
 };
 

@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons';
 import { useLocation } from 'react-router-dom';
 import { pageAgentService } from '../services/api';
+import { getTokenClaims } from '../services/session';
 import {
   PAGE_LABEL,
   getAgentPageId,
@@ -26,6 +27,8 @@ const GREETING = {
   'mistake-book': '我能读到你的错题本：哪些题到了该复习的时候、哪一科错得最多。把题干粘给我就能收录，也能帮你标记掌握。',
   parent: '我能看到这个账号的学习记录、错题、计划进度和投递情况，可以把它翻译成家长能听懂的话。',
   knowledge: '我能把你的错题和低分记录按知识点排成一张薄弱清单，告诉你先补哪块、它的前置知识是什么。',
+  'jd-match': '这个页面本身就是给我用的：左边粘 JD、右边看差在哪。想让我解释某条缺失怎么补，直接问。',
+  'mock-interview': '面试我出题、你回答，四轮之后给总评。答完我会提一条简历改写建议，你确认了才会动你的简历。',
   dashboard: '我能把计划、错题、投递、薄弱点四处合起来看，告诉你现在最该做哪一件事，以及为什么是它。',
   other: '这个页面还没接入数据，我只能给通用建议。简历、投递、计划、错题本、知识图谱、仪表盘这几个页面我能读到真实数据。',
 };
@@ -37,9 +40,36 @@ const SUGGESTIONS = {
   'mistake-book': ['我哪几道题最该复习', '哪一科错得最多', '帮我收录一道错题'],
   parent: ['这周学得怎么样', '哪里最需要补', '有没有该跟进的事'],
   knowledge: ['我最该补哪个知识点', '这些薄弱点有先后顺序吗', '哪一科问题最多'],
+  'jd-match': ['这份 JD 最看重什么', '缺失项里哪条最该先补', '怎么在两周内补上 SQL 案例'],
+  'mock-interview': ['这个岗位一般会问什么', '我上一场面试哪里答得不好', '面试前十分钟该准备什么'],
   dashboard: ['我现在最该做什么', '为什么先做这个而不是别的', '我今天还有哪些没做完'],
   other: ['启程 AI 能帮我做什么', '简历怎么写才有结果感'],
 };
+
+/* 会话 id 按「账号 + 页面」存在本地：刷新能接上，换账号不会串。
+   账号取 JWT 的 sub（登录时没单独存 user_id），取不到就退化成 anon——
+   服务端仍会校验归属，最坏情况只是多一次 404 后重开新会话。 */
+const sessionKey = (page) => {
+  const who = getTokenClaims()?.sub || 'anon';
+  return `qicheng:agent_session:${who}:${page}`;
+};
+
+function readSessionId(page) {
+  try {
+    return localStorage.getItem(sessionKey(page)) || null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSessionId(page, id) {
+  try {
+    if (id) localStorage.setItem(sessionKey(page), id);
+    else localStorage.removeItem(sessionKey(page));
+  } catch {
+    // 隐私模式下 localStorage 可能不可写，退化成「不记忆会话」，不影响对话
+  }
+}
 
 function errorText(error) {
   const status = error?.response?.status;
@@ -215,6 +245,7 @@ const AgentDock = ({ standalone = false }) => {
   const [pageId, setPageId] = useState(() => getAgentPageId());
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([]);
+  const [sessionId, setSessionId] = useState(null);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [busyId, setBusyId] = useState(null);
@@ -227,15 +258,44 @@ const AgentDock = ({ standalone = false }) => {
   // 页面登记的对象 id 变了就同步过来
   useEffect(() => subscribeAgentPageId(setPageId), []);
 
-  // 换页面就重开会话：上一页的上下文留着只会误导模型
+  // 换页面就重开会话：上一页的上下文留着只会误导模型。
+  // 同一页面刷新则从服务端把对话接回来——历史现在存在服务端，不在浏览器里。
   useEffect(() => {
+    let cancelled = false;
     setMessages([{ role: 'assistant', content: GREETING[page] || GREETING.other }]);
     setInput('');
     setToolCount(null);
+    setSessionId(null);
+
+    const stored = readSessionId(page);
+    if (stored) {
+      pageAgentService
+        .history(stored)
+        .then(({ data }) => {
+          if (cancelled) return;
+          const items = data.messages || [];
+          if (!items.length) return;
+          setSessionId(data.session_id);
+          setMessages(items);
+        })
+        .catch(() => {
+          // 会话不存在（换账号、库被清）就丢掉这个 id，别一直打 404
+          saveSessionId(page, null);
+        });
+    }
+
     pageAgentService
       .tools(page)
-      .then(({ data }) => setToolCount((data.tools || []).length))
-      .catch(() => setToolCount(null));
+      .then(({ data }) => {
+        if (!cancelled) setToolCount((data.tools || []).length);
+      })
+      .catch(() => {
+        if (!cancelled) setToolCount(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [page]);
 
   useEffect(() => {
@@ -271,7 +331,12 @@ const AgentDock = ({ standalone = false }) => {
           pageId,
           message: content,
           history,
+          sessionId,
         });
+        if (data.session_id) {
+          setSessionId(data.session_id);
+          saveSessionId(pageRef.current, data.session_id);
+        }
         setMessages((prev) => {
           const next = [...prev];
           next[next.length - 1] = {
@@ -293,7 +358,7 @@ const AgentDock = ({ standalone = false }) => {
         setSending(false);
       }
     },
-    [input, messages, pageId, sending],
+    [input, messages, pageId, sending, sessionId],
   );
 
   const decide = useCallback(

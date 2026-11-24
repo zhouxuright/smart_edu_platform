@@ -15,21 +15,21 @@ from __future__ import annotations
 import json
 import logging
 import re
-import uuid
-from datetime import datetime, timedelta, UTC
 
 from fastapi import APIRouter, Depends, HTTPException
 from langchain_core.messages import HumanMessage, SystemMessage
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from edu_app.agents.base import get_llm
-from edu_app.agents.tools import REGISTRY, ToolError, tools_for
+from edu_app.agents.tools import tools_for
 from edu_app.api.endpoints import get_current_user, require_llm_quota
 from edu_app.core.config import settings
 from edu_app.core.database import get_db
 from edu_app.models.agent import AgentProposal
+from edu_app.models.memory import AgentSession
 from edu_app.models.user import User
+from edu_app.services import memory, proposals, workflow
 from edu_app.services.llm_gate import llm_slot
 
 router = APIRouter(tags=["agent"])
@@ -42,12 +42,13 @@ PAGE_LABEL = {
     "mistake-book": "错题本",
     "parent": "家长门户",
     "knowledge": "知识图谱",
+    "jd-match": "JD 匹配",
+    "mock-interview": "模拟面试",
     "dashboard": "仪表盘",
     "other": "启程 AI",
 }
 
-# 提案超过这个时间就作废：用户半小时后再点「应用」，上下文早变了
-PROPOSAL_TTL = timedelta(minutes=30)
+# 提案的有效期与执行逻辑统一在 services/proposals.py，这里不再重复定义
 MAX_HISTORY_TURNS = 6
 
 
@@ -62,7 +63,9 @@ def _llm_ready() -> bool:
     )
 
 
-def _build_system_prompt(page: str, reads: dict[str, dict]) -> str:
+def _build_system_prompt(
+    page: str, reads: dict[str, dict], memory_block: str = "", prev_summary: str = ""
+) -> str:
     label = PAGE_LABEL.get(page, PAGE_LABEL["other"])
     sections = []
     for name, data in reads.items():
@@ -77,11 +80,19 @@ def _build_system_prompt(page: str, reads: dict[str, dict]) -> str:
     else:
         tool_block = "（当前页面没有可执行的写操作，action 必须为 null）"
 
+    # 长期记忆与上一次会话摘要都是「背景」，不是用户这一轮说的话。
+    # 位置放在数据之前、规则之后，并明确标注来源，避免模型把它们当成当前事实。
+    background = ""
+    if prev_summary:
+        background += f"\n{prev_summary}\n"
+    if memory_block:
+        background += f"\n{memory_block}\n"
+
     return f"""你是「启程 AI」的页面助手，用户当前在「{label}」页面。
 
 下面是你唯一可信的数据来源，全部由系统从数据库查得：
 {data_block}
-
+{background}
 你可以提议的写操作（只是提议，用户确认后才会执行）：
 {tool_block}
 
@@ -146,41 +157,18 @@ async def _run_reads(page: str, page_id, db: AsyncSession, user: User) -> dict[s
 async def _create_proposal(
     db: AsyncSession, user: User, page: str, action: dict
 ) -> tuple[dict | None, str | None]:
-    """校验模型给的动作并落成提案。返回 (提案, 拒绝原因)。"""
-    name = str(action.get("tool") or "").strip()
-    spec = REGISTRY.get(name)
-    if not spec or spec.kind != "write" or page not in spec.pages:
-        logger.warning("agent rejected tool=%s page=%s", name, page)
-        return None, "这个操作在当前页面不可用"
+    """校验模型给的动作并落成提案。返回 (提案, 拒绝原因)。
 
-    args = action.get("args") if isinstance(action.get("args"), dict) else {}
-    try:
-        ctx = await spec.validate(db, user, args)
-    except ToolError as error:
-        return None, str(error)
-    except Exception:
-        logger.exception("agent validate failed: %s", name)
-        return None, "参数校验失败，请换个说法再试"
-
-    preview = spec.preview(ctx) if spec.preview else {}
-    proposal = AgentProposal(
-        id=str(uuid.uuid4()),
-        user_id=user.id,
-        page=page,
-        tool=name,
-        args=args,
-        summary=str(preview.get("title") or spec.description)[:200],
-        preview=preview,
-        status="pending",
+    真正的校验、预览、落库都在 `services/proposals.py`：工作流里的确认点
+    也走同一份实现，否则两条路径迟早会分叉。
+    """
+    return await proposals.create(
+        db,
+        user,
+        page,
+        str(action.get("tool") or ""),
+        action.get("args") if isinstance(action.get("args"), dict) else {},
     )
-    db.add(proposal)
-    await db.commit()
-    return {
-        "id": proposal.id,
-        "tool": name,
-        "summary": proposal.summary,
-        "preview": preview,
-    }, None
 
 
 @router.post("/agent/chat")
@@ -200,11 +188,25 @@ async def agent_chat(
     if not _llm_ready():
         raise HTTPException(status_code=503, detail="AI 暂时不可用，请稍后再试")
 
+    # 会话落库：刷新页面、换设备都能接上，前端不再需要每轮传整段历史
+    session = await memory.get_or_create_session(
+        db, current_user, page, str(body.get("session_id") or "").strip() or None
+    )
+    history = await memory.load_history(db, session.id)
+    if not history and isinstance(body.get("history"), list):
+        # 兼容还没更新的前端：这一段只用一次、不落库，下一轮起只认服务端
+        history = body["history"]
+
     reads = await _run_reads(page, body.get("page_id"), db, current_user)
+    memory_block = await memory.render_memories(db, current_user.id)
+    prev_summary = await memory.render_previous_summary(
+        db, current_user.id, page, exclude_session_id=session.id
+    )
 
-    system_prompt = _build_system_prompt(page, reads)
-    human = f"{_history_block(body.get('history'))}用户现在说：{message}"
+    system_prompt = _build_system_prompt(page, reads, memory_block, prev_summary)
+    human = f"{_history_block(history)}用户现在说：{message}"
 
+    tokens = 0
     try:
         llm = get_llm(temperature=0.2, max_tokens=900)
         # 走 SDK 的调用也要占同一个额度池，否则闸门只管住 httpx 那几条路径
@@ -215,6 +217,8 @@ async def agent_chat(
         content = getattr(result, "content", "")
         if isinstance(content, list):
             content = "".join(str(part) for part in content)
+        usage = getattr(result, "usage_metadata", None) or {}
+        tokens = int(usage.get("total_tokens") or 0)
     except Exception:
         logger.exception("agent chat llm failed")
         raise HTTPException(status_code=503, detail="AI 暂时不可用，请稍后再试")
@@ -227,12 +231,29 @@ async def agent_chat(
     if action:
         proposal, notice = await _create_proposal(db, current_user, page, action)
 
+    await memory.append_turn(
+        db,
+        session,
+        message,
+        reply,
+        proposal_id=(proposal or {}).get("id"),
+        tool_name=(proposal or {}).get("tool"),
+        tokens=tokens,
+    )
+    await db.commit()
+
+    # 用户明确说「记住…」才抽记忆，且放后台：抽取失败不影响这轮回答
+    if memory.looks_like_memory_request(message):
+        memory.schedule_extraction(current_user.id, message, session.id)
+
     return {
         "reply": reply,
         "proposal": proposal,
         "notice": notice,
         "page": page,
+        "session_id": session.id,
         "context_used": list(reads.keys()),
+        "memory_used": bool(memory_block or prev_summary),
     }
 
 
@@ -248,63 +269,88 @@ async def agent_chat_confirm(
     if not proposal_id:
         raise HTTPException(status_code=400, detail="缺少提案 id")
 
-    proposal = (
+    try:
+        if accept:
+            proposal, result = await proposals.apply(db, current_user, proposal_id)
+        else:
+            proposal = await proposals.reject(db, current_user, proposal_id)
+            result = None
+    except proposals.ProposalError as error:
+        raise HTTPException(status_code=error.status, detail=str(error))
+
+    response: dict = {"status": proposal.status, "tool": proposal.tool, "result": result}
+
+    # 提案挂在工作流上：确认完必须把流程推下去。
+    # 少了这一步，用户点完「应用」简历改了，但面试流程永远停在等待确认——
+    # 而且没有任何提示，因为写操作本身是成功的。
+    if proposal.run_id:
+        try:
+            run = await workflow.resume_run(db, current_user, proposal.run_id, accept)
+            if accept:
+                run = await workflow.advance(db, current_user, run.id)
+            steps = await workflow.load_steps(db, run.id)
+            response["run"] = workflow.run_payload(run, steps)
+        except Exception as error:  # noqa: BLE001 - 写操作已成功，不能因此报错
+            logger.warning("advance run %s after proposal failed: %s", proposal.run_id, error)
+            response["run_error"] = str(error)
+
+    return response
+
+
+@router.get("/agent/chat/history")
+async def agent_chat_history(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """恢复一个会话。前端刷新或换设备后靠它把对话接回来。
+
+    提案状态一并带回去：已经应用/拒绝的卡片要置灰，否则用户会重复点。
+    """
+    session = (
         await db.execute(
-            select(AgentProposal).where(
-                AgentProposal.id == proposal_id,
-                AgentProposal.user_id == current_user.id,
+            select(AgentSession).where(
+                AgentSession.id == session_id,
+                AgentSession.user_id == current_user.id,
             )
         )
     ).scalars().first()
-    if not proposal:
-        raise HTTPException(status_code=404, detail="提案不存在")
-    if proposal.status != "pending":
-        raise HTTPException(status_code=409, detail="这个提案已经处理过了")
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
 
-    # 先取出来再动，避免 commit 后 ORM 实例过期、再读字段触发懒加载
-    tool_name = proposal.tool
-    args = proposal.args or {}
-    created_at = proposal.created_at
+    rows = await memory.load_session_messages(db, session.id)
+    proposal_ids = [row.proposal_id for row in rows if row.proposal_id]
+    # 注意别把局部变量叫 proposals：会遮住上面导入的 services.proposals
+    by_id: dict[str, AgentProposal] = {}
+    if proposal_ids:
+        found = (
+            await db.execute(
+                select(AgentProposal).where(AgentProposal.id.in_(proposal_ids))
+            )
+        ).scalars().all()
+        by_id = {item.id: item for item in found}
 
-    if created_at and datetime.now(UTC) - created_at > PROPOSAL_TTL:
-        await db.execute(
-            update(AgentProposal).where(AgentProposal.id == proposal_id).values(status="expired")
-        )
-        await db.commit()
-        raise HTTPException(status_code=409, detail="提案已过期，请重新生成")
+    messages = []
+    for row in rows:
+        item: dict = {"role": row.role, "content": row.content or ""}
+        proposal = by_id.get(row.proposal_id or "")
+        if proposal:
+            item["proposal"] = {
+                "id": proposal.id,
+                "tool": proposal.tool,
+                "summary": proposal.summary,
+                "preview": proposal.preview,
+            }
+            item["decided"] = None if proposal.status == "pending" else proposal.status
+        messages.append(item)
 
-    if not accept:
-        await db.execute(
-            update(AgentProposal).where(AgentProposal.id == proposal_id).values(status="rejected")
-        )
-        await db.commit()
-        return {"status": "rejected", "tool": tool_name}
-
-    spec = REGISTRY.get(tool_name)
-    if not spec or not spec.apply:
-        raise HTTPException(status_code=400, detail="这个操作已下线")
-
-    try:
-        result = await spec.apply(db, current_user, args)
-    except ToolError as error:
-        await db.rollback()
-        await db.execute(
-            update(AgentProposal).where(AgentProposal.id == proposal_id).values(status="expired")
-        )
-        await db.commit()
-        raise HTTPException(status_code=409, detail=str(error))
-    except Exception:
-        await db.rollback()
-        logger.exception("agent apply failed: %s", tool_name)
-        raise HTTPException(status_code=500, detail="执行失败，请重试")
-
-    await db.execute(
-        update(AgentProposal)
-        .where(AgentProposal.id == proposal_id)
-        .values(status="applied", applied_at=datetime.now(UTC))
-    )
-    await db.commit()
-    return {"status": "applied", "tool": tool_name, "result": result}
+    return {
+        "session_id": session.id,
+        "page": session.page,
+        "title": session.title,
+        "status": session.status,
+        "messages": messages,
+    }
 
 
 @router.get("/agent/chat/tools")
