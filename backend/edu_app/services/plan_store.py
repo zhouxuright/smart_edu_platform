@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from edu_app.models.plan import InternshipPlan, InternshipPlanTask, PlanEvent, PlanReminder
+from edu_app.services import memory_events
 
 
 def task_payload(task: InternshipPlanTask) -> dict[str, Any]:
@@ -70,6 +71,11 @@ async def set_task_completed(
         await log_event(db, user_id, "task_completed", task.plan_id, task.id)
         if all(item.completed for item in all_tasks):
             await log_event(db, user_id, "plan_completed", task.plan_id)
+            # 计划全部做完是一个值得记住的事实，直接写长期记忆（不经过模型）。
+            # 只在「全完成」这一刻写，不是每完成一个任务写一次
+            plan = await db.get(InternshipPlan, task.plan_id)
+            if plan:
+                await memory_events.plan_completed(db, user_id, plan)
         elif all(item.id == task.id or not item.completed for item in all_tasks):
             await log_event(db, user_id, "first_task_completed", task.plan_id, task.id)
 

@@ -18,11 +18,36 @@ import {
 } from 'antd';
 import { AudioOutlined, CheckOutlined, CloseOutlined } from '@ant-design/icons';
 import { pageAgentService, resumeService, workflowService } from '../services/api';
+import { getTokenClaims } from '../services/session';
 
 const { Title, Paragraph, Text } = Typography;
 const { TextArea } = Input;
 
 const ROUNDS = 4;
+
+/* 正在进行的面试 id 按「账号」存在本地：答到一半刷新、关掉页面明天回来都能接着答。
+   服务端只认 run 归属，本地这份丢了最多是重开一场，不会看到别人的记录。 */
+const runKey = () => {
+  const who = getTokenClaims()?.sub || 'anon';
+  return `qicheng:mock_interview:${who}`;
+};
+
+function readRunId() {
+  try {
+    return localStorage.getItem(runKey()) || null;
+  } catch {
+    return null;
+  }
+}
+
+function saveRunId(id) {
+  try {
+    if (id) localStorage.setItem(runKey(), id);
+    else localStorage.removeItem(runKey());
+  } catch {
+    // 隐私模式下不可写，退化成「刷新后重开」，不影响面试本身
+  }
+}
 
 /**
  * 模拟面试：跑在可恢复的状态机上（edu_app/flows/mock_interview.py）。
@@ -55,6 +80,37 @@ const MockInterview = () => {
       .catch(() => setError('简历列表读取失败，刷新试试'));
   }, []);
 
+  // 刷新恢复：本地存着 run id 就把它接回来。
+  // 已结束的（succeeded）也恢复，让用户还能看到总评；作废/失败的清掉本地记录。
+  useEffect(() => {
+    const stored = readRunId();
+    if (!stored) return undefined;
+    let cancelled = false;
+    workflowService
+      .get(stored)
+      .then(({ data }) => {
+        if (cancelled) return;
+        if (['running', 'awaiting_human', 'succeeded'].includes(data.status)) {
+          setRun(data);
+        } else {
+          saveRunId(null);
+        }
+      })
+      .catch(() => {
+        // 404 说明流程已被清掉，本地这份就是过期 id
+        if (!cancelled) saveRunId(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 只有「还能继续或还值得看」的状态才留 id，其余清掉，避免下次刷新接回一个死流程
+  const syncStored = (data) => {
+    const keep = ['running', 'awaiting_human', 'succeeded'].includes(data?.status);
+    saveRunId(keep ? data.id : null);
+  };
+
   const state = run?.state || {};
   const pending = state._pending || {};
   const answers = state.answers || [];
@@ -66,6 +122,7 @@ const MockInterview = () => {
     setError('');
     setRun(null);
     setAnswer('');
+    saveRunId(null);
     try {
       const { data } = await workflowService.start('mock_interview', {
         resume_id: resumeId,
@@ -73,6 +130,7 @@ const MockInterview = () => {
         jd_text: jd.trim() || undefined,
       });
       setRun(data);
+      syncStored(data);
       if (data.status === 'failed') setError(data.error || '流程执行失败');
     } catch (e) {
       setError(e?.response?.data?.detail || '开始面试失败，请稍后重试');
@@ -92,6 +150,7 @@ const MockInterview = () => {
     try {
       const { data } = await workflowService.resume(run.id, true, { answer: answer.trim() });
       setRun(data);
+      syncStored(data);
       setAnswer('');
       if (data.status === 'failed') setError(data.error || '流程执行失败');
     } catch (e) {
@@ -107,6 +166,7 @@ const MockInterview = () => {
     try {
       const { data } = await workflowService.resume(run.id, false);
       setRun(data);
+      syncStored(data);
     } catch (e) {
       setError(e?.response?.data?.detail || '操作失败');
     } finally {
@@ -121,7 +181,10 @@ const MockInterview = () => {
     setError('');
     try {
       const { data } = await pageAgentService.confirm(proposalId, accept);
-      if (data.run) setRun(data.run);
+      if (data.run) {
+        setRun(data.run);
+        syncStored(data.run);
+      }
     } catch (e) {
       setError(e?.response?.data?.detail || '操作失败，请重试');
     } finally {

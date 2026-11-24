@@ -23,6 +23,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from dataclasses import dataclass
@@ -32,6 +33,8 @@ from typing import Any, Awaitable, Callable
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from edu_app.core.database import AsyncSessionLocal
+from edu_app.models.agent import AgentProposal
 from edu_app.models.user import User
 from edu_app.models.workflow import AgentRun, AgentStep
 from edu_app.services import llm_usage, proposals, quota as quota_service
@@ -422,3 +425,102 @@ async def resume_run(
     run.updated_at = datetime.now(UTC)
     await db.commit()
     return run
+
+
+# ---------------------------------------------------------------------------
+# 过期清扫
+# ---------------------------------------------------------------------------
+
+# 十分钟扫一次。量级是「每天几十条」，不需要更密
+SWEEP_INTERVAL = timedelta(minutes=10)
+
+
+async def sweep_expired(db: AsyncSession) -> dict[str, int]:
+    """作废过期的流程与提案，返回各自影响的行数。
+
+    为什么必须有这一步：`expires_at` 和提案 TTL 都只是「写在字段里」，
+    没人扫的话它们只是装饰——作废的流程会一直躺在列表里，超时提案会一直
+    显示「待确认」，用户点下去才报「已过期」。这类「状态字段写了但没人执行」
+    是最容易在演示时被看穿的一类问题。
+
+    两件事一起做，顺序不能反：先把挂在过期 run 上的 pending 提案作废，
+    再取消 run。反过来会留下「流程已取消、提案还能点」的孤儿。
+    """
+    now = datetime.now(UTC)
+
+    stale_run_ids = (
+        await db.execute(
+            select(AgentRun.id).where(
+                AgentRun.status.in_(("running", "awaiting_human")),
+                AgentRun.expires_at.is_not(None),
+                AgentRun.expires_at < now,
+            )
+        )
+    ).scalars().all()
+
+    proposals_expired = 0
+    runs_cancelled = 0
+
+    if stale_run_ids:
+        result = await db.execute(
+            update(AgentProposal)
+            .where(
+                AgentProposal.run_id.in_(stale_run_ids),
+                AgentProposal.status == "pending",
+            )
+            .values(status="expired")
+        )
+        proposals_expired += result.rowcount
+
+        result = await db.execute(
+            update(AgentRun)
+            .where(AgentRun.id.in_(stale_run_ids))
+            .values(
+                status="cancelled",
+                current_step=None,
+                updated_at=now,
+                error=f"超时未完成（超过 {int(RUN_TTL.total_seconds() // 3600)} 小时），已自动作废",
+            )
+        )
+        runs_cancelled += result.rowcount
+
+    # 没挂在流程上的提案（聊天里生成的）只看 TTL
+    result = await db.execute(
+        update(AgentProposal)
+        .where(
+            AgentProposal.status == "pending",
+            AgentProposal.created_at < now - proposals.PROPOSAL_TTL,
+        )
+        .values(status="expired")
+    )
+    proposals_expired += result.rowcount
+
+    await db.commit()
+    return {"runs": runs_cancelled, "proposals": proposals_expired}
+
+
+async def sweep_loop(stop_event: asyncio.Event) -> None:
+    """进程内的清扫循环。和 `reminder_loop` 同一个模式：不引 broker。
+
+    单副本时它就是唯一执行者；将来多副本，`UPDATE ... WHERE status = ...`
+    天然幂等，两个副本同时扫也只会有一个真的改到行。
+    """
+    while not stop_event.is_set():
+        try:
+            async with AsyncSessionLocal() as db:
+                stats = await sweep_expired(db)
+            if stats["runs"] or stats["proposals"]:
+                logger.info(
+                    "清扫：作废 %d 个流程、%d 条提案",
+                    stats["runs"],
+                    stats["proposals"],
+                )
+        except Exception:  # noqa: BLE001 - 循环不能因为一次失败就退出
+            logger.exception("清扫过期流程失败")
+
+        try:
+            await asyncio.wait_for(
+                stop_event.wait(), timeout=SWEEP_INTERVAL.total_seconds()
+            )
+        except asyncio.TimeoutError:
+            continue

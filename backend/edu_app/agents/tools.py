@@ -31,6 +31,7 @@ from edu_app.models.resume import Resume
 from edu_app.models.user import User
 from edu_app.services.ebbinghaus import get_due_reviews_for_user
 from edu_app.services.llm_text import strip_inline_markers
+from edu_app.services import memory_events
 from edu_app.services.plan_store import (
     current_plan as load_current_plan,
     reminder_for as load_reminder,
@@ -658,6 +659,9 @@ async def _apply_add_mistake(db: AsyncSession, user: User, args: dict) -> dict:
         is_resolved=0,
     )
     db.add(row)
+    # 先 flush 拿 id，再写领域事件记忆，最后一起提交
+    await db.flush()
+    await memory_events.mistake_added(db, user.id, row)
     await db.commit()
     await db.refresh(row)
     return {"mistake_id": row.id, "subject": row.subject, "topic": row.topic}
@@ -707,6 +711,10 @@ async def _apply_resolve_mistake(db: AsyncSession, user: User, args: dict) -> di
     ctx = await _validate_resolve_mistake(db, user, args)
     row = ctx["mistake"]
     row.is_resolved = 1 if ctx["resolved"] else 0
+    # 订正了就把「这个知识点还有未解决错题」那条记忆覆盖掉，
+    # 否则模型会一直以为他还没补上
+    if ctx["resolved"]:
+        await memory_events.mistake_resolved(db, user.id, row)
     await db.commit()
     return {"mistake_id": row.id, "resolved": bool(row.is_resolved)}
 

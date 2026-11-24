@@ -107,12 +107,21 @@ async def lifespan(app: FastAPI):
     memory_stop = asyncio.Event()
     memory_task = asyncio.create_task(archive_loop(memory_stop))
 
+    # 过期清扫：作废超时的流程与提案。没有这一步，expires_at 和提案 TTL
+    # 只是写在字段里的装饰——作废的流程会一直躺在列表里，超时提案
+    # 一直显示「待确认」，用户点下去才报错
+    from edu_app.services.workflow import sweep_loop
+
+    sweep_stop = asyncio.Event()
+    sweep_task = asyncio.create_task(sweep_loop(sweep_stop))
+
     try:
         yield
     finally:
         reminder_stop.set()
         memory_stop.set()
-        for t in (task, reminder_task, memory_task):
+        sweep_stop.set()
+        for t in (task, reminder_task, memory_task, sweep_task):
             try:
                 t.cancel()
             except Exception:

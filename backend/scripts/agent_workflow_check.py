@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import uuid
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -26,6 +28,7 @@ from sqlalchemy import delete, select
 
 from edu_app.core.database import AsyncSessionLocal, engine
 from edu_app.flows.jd_match import resume_to_text
+from edu_app.models.agent import AgentProposal
 from edu_app.models.resume import Resume
 from edu_app.models.user import User
 from edu_app.models.workflow import AgentRun, AgentStep
@@ -45,6 +48,7 @@ engine.echo = False
 
 EMAIL = "demo@example.com"
 PROBE_KINDS = ("jd_match", "__probe_pause")
+PROBE_TOOL = "__probe_tool"
 
 passed: list[str] = []
 failed: list[str] = []
@@ -98,6 +102,9 @@ async def cleanup(db, user_id: int):
     if run_ids:
         await db.execute(delete(AgentStep).where(AgentStep.run_id.in_(run_ids)))
         await db.execute(delete(AgentRun).where(AgentRun.id.in_(run_ids)))
+    await db.execute(
+        delete(AgentProposal).where(AgentProposal.tool == PROBE_TOOL)
+    )
     await db.commit()
 
 
@@ -287,6 +294,63 @@ async def main() -> int:
                 check("别人的 run 取不到", True)
         else:
             print("SKIP  别人的 run 取不到（库里只有一个用户）")
+
+        # 11. 过期清扫：expires_at 与提案 TTL 必须真的被执行，不能只是写在字段里
+        from edu_app.services import proposals as proposal_service
+
+        now = datetime.now(UTC)
+        stale = await workflow.start_run(db, user, "__probe_pause", {})
+        stale.expires_at = now - timedelta(minutes=1)
+        await db.commit()
+
+        def make_proposal(summary, *, run_id=None, age_minutes=0):
+            return AgentProposal(
+                id=str(uuid.uuid4()),
+                user_id=user.id,
+                page="__probe__",
+                tool=PROBE_TOOL,
+                args={},
+                summary=summary,
+                status="pending",
+                run_id=run_id,
+                step="pause" if run_id else None,
+                created_at=now - timedelta(minutes=age_minutes),
+            )
+
+        stale_prop = make_proposal("挂在过期流程上的提案", run_id=stale.id, age_minutes=2)
+        old_prop = make_proposal(
+            "超过 TTL 的独立提案",
+            age_minutes=int(proposal_service.PROPOSAL_TTL.total_seconds() // 60) + 5,
+        )
+        fresh_prop = make_proposal("刚生成的提案")
+        db.add_all([stale_prop, old_prop, fresh_prop])
+        await db.commit()
+
+        stats = await workflow.sweep_expired(db)
+        for row in (stale, stale_prop, old_prop, fresh_prop):
+            await db.refresh(row)
+
+        check(
+            "过期流程被作废",
+            stale.status == "cancelled" and stale.current_step is None,
+            f"status={stale.status} step={stale.current_step}",
+        )
+        check("作废时写明原因", "超时" in (stale.error or ""), str(stale.error))
+        check("过期流程上的提案一起作废", stale_prop.status == "expired", stale_prop.status)
+        check("超过 TTL 的独立提案被作废", old_prop.status == "expired", old_prop.status)
+        check("未超时的提案不动", fresh_prop.status == "pending", fresh_prop.status)
+        check(
+            "清扫返回真实影响行数",
+            stats["runs"] >= 1 and stats["proposals"] >= 2,
+            str(stats),
+        )
+
+        stats2 = await workflow.sweep_expired(db)
+        check(
+            "重复清扫不重复处理",
+            stats2["runs"] == 0 and stats2["proposals"] == 0,
+            str(stats2),
+        )
 
         await cleanup(db, user.id)
 

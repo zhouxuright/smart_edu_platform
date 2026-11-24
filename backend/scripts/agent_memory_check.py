@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from edu_app.core.database import AsyncSessionLocal, engine
@@ -64,7 +64,15 @@ async def cleanup(db, user_id: int):
     )
     await db.execute(
         delete(UserMemory).where(
-            UserMemory.user_id == user_id, UserMemory.mem_key.like("probe_%")
+            UserMemory.user_id == user_id,
+            or_(
+                UserMemory.mem_key.like("probe_%"),
+                # 领域事件写的键形如 topic_probe_xxx_几何，不带前缀
+                UserMemory.mem_key.like(f"%{SUFFIX}%"),
+                # 计划完成是单例键（plan_latest），键里没有 probe 标记，
+                # 测完必须删，否则会盖住这个账号真实的进度记忆
+                UserMemory.mem_key == "plan_latest",
+            ),
         )
     )
     await db.commit()
@@ -219,6 +227,105 @@ async def main() -> int:
             memory.normalize_key("Target City") == "target_city"
             and memory.normalize_key("target-city") == "target_city",
             memory.normalize_key("Target-City"),
+        )
+
+        # ---------------- 领域事件写入（不经过模型） ----------------
+        from types import SimpleNamespace
+
+        from edu_app.services import memory_events
+
+        topic = f"probe_{SUFFIX}_几何"
+
+        async def event_rows():
+            return (
+                await db.execute(
+                    select(UserMemory)
+                    .where(UserMemory.user_id == user.id, UserMemory.source == "event")
+                    .order_by(UserMemory.id)
+                )
+            ).scalars().all()
+
+        await memory_events.mistake_added(
+            db, user.id, SimpleNamespace(subject="数学", topic=topic, id=1)
+        )
+        await db.commit()
+        rows = await event_rows()
+        check(
+            "加错题直接写记忆",
+            len(rows) == 1 and "未解决的错题" in rows[0].value,
+            str([r.value for r in rows]),
+        )
+        check("事件记忆可追溯到来源", rows[0].source_ref == "event:mistake", rows[0].source_ref)
+        check(
+            "中文知识点不会被归一成同一个键",
+            "几何" in rows[0].mem_key,
+            rows[0].mem_key,
+        )
+
+        first_id = rows[0].id
+        await memory_events.mistake_added(
+            db, user.id, SimpleNamespace(subject="数学", topic=topic, id=2)
+        )
+        await db.commit()
+        rows = await event_rows()
+        check(
+            "同一知识点重复错不刷版本",
+            len(rows) == 1 and rows[0].id == first_id,
+            f"rows={len(rows)}",
+        )
+
+        await memory_events.mistake_added(
+            db, user.id, SimpleNamespace(subject="数学", topic=f"probe_{SUFFIX}_函数", id=3)
+        )
+        await db.commit()
+        rows = await event_rows()
+        check("不同知识点分开记", len(rows) == 2, f"rows={len(rows)}")
+
+        # 订正 → 覆盖旧结论，但旧行保留并指向新行
+        await memory_events.mistake_resolved(
+            db, user.id, SimpleNamespace(subject="数学", topic=topic, id=1)
+        )
+        await db.commit()
+        chain = (
+            await db.execute(
+                select(UserMemory)
+                .where(UserMemory.user_id == user.id, UserMemory.mem_key.like(f"%{SUFFIX}_几何"))
+                .order_by(UserMemory.id)
+            )
+        ).scalars().all()
+        check(
+            "订正后旧结论被新版本覆盖",
+            len(chain) == 2
+            and chain[-1].superseded_by is None
+            and "已订正" in chain[-1].value,
+            str([(r.id, r.value, r.superseded_by) for r in chain]),
+        )
+        check(
+            "旧行保留并指向新行",
+            len(chain) == 2 and chain[0].superseded_by == chain[-1].id,
+            str([r.superseded_by for r in chain]),
+        )
+
+        await memory_events.plan_completed(db, user.id, SimpleNamespace(title="秋招冲刺"))
+        await db.commit()
+        plan_row = (
+            await db.execute(
+                select(UserMemory).where(
+                    UserMemory.user_id == user.id, UserMemory.mem_key == "plan_latest"
+                )
+            )
+        ).scalars().first()
+        check(
+            "计划完成写进度记忆",
+            plan_row is not None and plan_row.kind == "progress" and "秋招冲刺" in plan_row.value,
+            getattr(plan_row, "value", None),
+        )
+
+        rendered3 = await memory.render_memories(db, user.id)
+        check(
+            "事件记忆会进 prompt",
+            "[progress]" in rendered3 and "[weakness]" in rendered3,
+            rendered3[:120],
         )
 
         # ---------------- 归档 ----------------

@@ -15,11 +15,11 @@ from edu_app.models import saas
 from edu_app.schemas import schemas
 from edu_app.services import auth, ebbinghaus
 from edu_app.agents import mentor, knowledge, assessment, collaborative, parent, mistake, rag_tools
-from edu_app.agents.memory_layer import MemoryLayerEngine
 from edu_app.agents.graph_rag import GraphRAGSearcher
 from edu_app.core.model_router import model_router
 from edu_app.services.advanced_rag_pipeline import advanced_rag_pipeline
 from edu_app.services.embedding import embed_text, embedding_status
+from edu_app.services import memory_events
 from edu_app.services import quota as quota_service
 from edu_app.services import llm_usage
 from edu_app.services.text_utils import tokenize
@@ -2355,6 +2355,10 @@ async def batch_image_upload(
             await db.refresh(mistake_record)
             
             mistakes_created.append(mistake_record)
+
+            # 领域事件直接写长期记忆：错题是结构化事实，不经过模型。
+            # 失败只记日志，不影响上传
+            await memory_events.mistake_added(db, current_user.id, mistake_record)
             
             # 4. Trigger Analysis
             print(f"Adding background task for mistake {mistake_record.id}")
@@ -2442,6 +2446,10 @@ async def create_mistake(mistake: schemas.MistakeCreate, background_tasks: Backg
         is_resolved=0
     )
     db.add(db_mistake)
+    # 先 flush 拿到 id 再写记忆，最后一起提交：记忆和错题在同一个事务里，
+    # 不会出现「错题没写成、记忆却记了一笔」
+    await db.flush()
+    await memory_events.mistake_added(db, current_user.id, db_mistake)
     await db.commit()
     await db.refresh(db_mistake)
     
@@ -2576,7 +2584,12 @@ async def batch_upload_mistakes(
             
         if not mistakes_to_add:
              raise HTTPException(status_code=400, detail="No valid mistake entries found")
-             
+
+        # 批量导入一次可能几十条，同一知识点只写一条记忆（upsert 会合并），
+        # 所以这里按记录逐条调也不会刷出几十行
+        for record in mistakes_to_add:
+            await memory_events.mistake_added(db, current_user.id, record)
+
         await db.commit()
         
         # Trigger background analysis for each mistake
@@ -2644,10 +2657,9 @@ async def get_ebbinghaus_due_reviews(payload: schemas.EbbinghausReviewQuery, db:
     due_items = await ebbinghaus.get_due_reviews_for_user(db, target_user_id, max_items=payload.max_items or 5)
     return {"student_id": target_user_id, "due_count": len(due_items), "reviews": due_items}
 
-@router.post("/memory/insights")
-async def get_student_memory_insights(db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
-    insights = await MemoryLayerEngine.extract_and_enrich_context(db, current_user.id)
-    return insights
+# 原来的 POST /memory/insights 已删除：它每次请求重查画像 + 错题 + 学习记录
+# 拼成一段字符串，和 user_memories 是两套事实来源，而前端从未调用过它。
+# 长期记忆统一走 services/memory.py（render_memories 注入对话上下文）。
 
 @router.post("/graph_rag/search")
 async def graph_rag_expanded_search(payload: schemas.GraphRAGQuery, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):

@@ -48,7 +48,8 @@ ARCHIVE_BATCH = 5
 ARCHIVE_INTERVAL = 600
 
 MEMORY_LIMIT = 8
-MEMORY_KINDS = {"preference", "fact", "weakness", "goal", "constraint"}
+# `progress` 由领域事件写入（计划完成），不走模型抽取
+MEMORY_KINDS = {"preference", "fact", "weakness", "goal", "constraint", "progress"}
 
 # 只有这几类话才触发「抽取记忆」的额外模型调用。不是每轮都抽——
 # 每轮都抽等于把对话成本翻倍，而且抽出来的多半是噪声。
@@ -202,8 +203,14 @@ async def load_session_messages(
 # ---------------------------------------------------------------------------
 
 def normalize_key(key: Any) -> str:
-    """键必须稳定，否则同一个意思会散成十个键，检索时一个都命不中。"""
-    raw = re.sub(r"[^a-zA-Z0-9_]+", "_", str(key or "").strip().lower())
+    """键必须稳定，否则同一个意思会散成十个键，检索时一个都命不中。
+
+    **必须保留中文。** 原来的 `[^a-zA-Z0-9_]` 会把「立体几何」整段删掉，
+    归一化后只剩 `topic`——所有中文知识点会塌缩成同一个键，
+    等于把不同知识点合并成一条记忆，而且互相覆盖。`\\w` 在 Python 3
+    里默认按 Unicode 匹配，正好能留下中文。
+    """
+    raw = re.sub(r"[^\w]+", "_", str(key or "").strip().lower(), flags=re.UNICODE)
     raw = re.sub(r"_+", "_", raw).strip("_")
     return (raw or "note")[:64]
 
