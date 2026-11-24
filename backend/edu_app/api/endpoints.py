@@ -1422,6 +1422,34 @@ def _clean_recommendation_lines(ai_text: str) -> list[str]:
     return clean_lines[:3]
 
 
+# 推荐行动 → 该去哪一页动手。
+#
+# 为什么要做这层映射：推荐行动是模型生成的自由文本，而「点一下就能去做」
+# 需要结构化目标。让模型直接吐路由是不可靠的（它会编出不存在的路径），
+# 所以改成确定性关键词映射：命中就带按钮，命中不了就只显示文字。
+# 顺序有意义，先匹配到的先赢——「模拟面试」必须排在「面试」类泛词前面。
+RECOMMENDATION_ROUTES: tuple[tuple[tuple[str, ...], str, str], ...] = (
+    # 「记录一次真实学习活动（例如…模拟面试）」的意图是去记录，不是去面试，
+    # 所以这条必须排在「模拟面试」前面，否则会被后面的关键词抢走。
+    (("学习活动", "记录一次"), "/dashboard", "记录学习活动"),
+    (("模拟面试",), "/mock-interview", "去模拟面试"),
+    (("简历", "一页"), "/resume", "去简历工作台"),
+    (("JD", "岗位", "招聘"), "/jd-match", "去做 JD 匹配"),
+    (("错题", "订正", "专项复习", "专项练习", "复练"), "/mistake-book", "去错题本"),
+    (("计划", "7 天", "拆成"), "/plan/internship", "查看我的计划"),
+    (("投递", "申请"), "/applications", "去投递看板"),
+    (("知识点", "知识覆盖", "复习", "学习频次"), "/knowledge-extraction", "去知识抽取"),
+)
+
+
+def recommendation_action(text: str) -> dict:
+    """给一条推荐行动找出该跳转的页面。找不到就返回空 dict（前端只渲染文字）。"""
+    for keywords, route, cta in RECOMMENDATION_ROUTES:
+        if any(k in (text or "") for k in keywords):
+            return {"route": route, "cta": cta}
+    return {}
+
+
 async def _refresh_dashboard_recommendations(user_id: int, full_name: str, record_count: int) -> None:
     """后台生成仪表盘推荐行动，结果写进进程内缓存。
 
@@ -1542,6 +1570,11 @@ async def dashboard_summary(db: AsyncSession = Depends(get_db), current_user: Us
         "study_hours": round(study_hours, 1),
         "achievements": achievements,
         "recommendations": recommendations,
+        # 结构化版本：前端据此渲染「点一下就去对应页面」。
+        # 老字段保留成纯字符串——小程序还在读它，改形状会直接把它打挂。
+        "recommendation_actions": [
+            {"text": text, **recommendation_action(text)} for text in recommendations
+        ],
         "weekly_activity": sum(1 for r in records if norm_ts(getattr(r, "timestamp", None)) and norm_ts(getattr(r, "timestamp", None)) >= since),
         "subjects_count": len({r.subject for r in records}),
         "score_trend": [

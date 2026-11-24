@@ -1,12 +1,66 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Card, Row, Col, Statistic, Typography, Spin, List, message, Button, Form, Input, Select, InputNumber, Space } from 'antd';
-import { BookOutlined, ClockCircleOutlined, TrophyOutlined, RocketOutlined, RobotOutlined, UserOutlined } from '@ant-design/icons';
+import { Card, Row, Col, Statistic, Typography, Spin, List, message, Button, Form, Input, Select, InputNumber, Space, Empty } from 'antd';
+import { BookOutlined, ClockCircleOutlined, TrophyOutlined, RocketOutlined, RobotOutlined, UserOutlined, ArrowRightOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { dashboardService, agentService } from '../services/api';
 import EmptyGuide from '../components/EmptyGuide';
 import { getRole } from '../services/session';
 
 const { Title } = Typography;
+
+// 模型输出里常带 Markdown 记号、序号、CoT 标题头，统一在这里洗掉。
+const REC_JUNK = ['目标', '思考', '行动步骤', '下一步', '行动建议'];
+
+const cleanRecText = (item) =>
+  String(item || '')
+    .replace(/^[#\s\d\.\-•*]+/, '')
+    .replace(/^(目标|思考|行动步骤|结果\/下一步|下一步)[\s：:]*/, '')
+    .trim();
+
+/**
+ * 一条推荐行动。
+ *
+ * 后端给 `route` 就说明这条能落到具体页面，做成可点的；
+ * 给不出来就只显示文字——比强行跳一个不相关的页面好。
+ */
+const RecommendationItem = ({ index, item, onGo }) => {
+  const [hover, setHover] = useState(false);
+  const clickable = Boolean(item.route);
+
+  return (
+    <List.Item
+      onClick={clickable ? () => onGo(item.route) : undefined}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        cursor: clickable ? 'pointer' : 'default',
+        padding: '10px 12px',
+        borderRadius: 8,
+        background: clickable && hover ? 'rgba(216, 233, 255, 0.6)' : 'transparent',
+        transition: 'background 0.15s ease',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+      }}
+    >
+      <span style={{ flex: 1, color: clickable && hover ? '#1677ff' : 'inherit' }}>
+        {index + 1}. {item.text}
+      </span>
+      {clickable && (
+        <span
+          style={{
+            color: hover ? '#1677ff' : 'rgba(0, 0, 0, 0.45)',
+            fontSize: 13,
+            whiteSpace: 'nowrap',
+            transition: 'color 0.15s ease',
+          }}
+        >
+          {item.cta || '去处理'} <ArrowRightOutlined />
+        </span>
+      )}
+    </List.Item>
+  );
+};
 
 const Dashboard = () => {
   const [data, setData] = useState(null);
@@ -57,6 +111,17 @@ const Dashboard = () => {
     fetchSummary(controller.signal);
     return () => controller.abort();
   }, []);
+
+  // 优先用后端给的结构化版本（带 route/cta）；老接口只回字符串时退化成纯文本。
+  const recItems = (() => {
+    const actions = data?.recommendation_actions;
+    const raw = Array.isArray(actions) && actions.length
+      ? actions
+      : (data?.recommendations ?? []).map((text) => ({ text }));
+    return raw
+      .map((item) => ({ ...item, text: cleanRecText(item.text) }))
+      .filter((item) => item.text && item.text.length >= 3 && !REC_JUNK.includes(item.text));
+  })();
 
   return (
     <div>
@@ -157,18 +222,39 @@ const Dashboard = () => {
           <Col span={24}>
             {/* 推荐行动是给学生本人的学习建议，家长视图下不展示，避免角色错位 */}
             {!isParent && (
-            <Card title="推荐行动">
-              <List
-                dataSource={(data?.recommendations ?? [])
-                  .map(item => String(item || '').replace(/^[#\s\d\.\-•*]+/, '').replace(/^(目标|思考|行动步骤|结果\/下一步|下一步)[\s：:]*/, '').trim())
-                  .filter(item => item && item.length >= 3 && !['目标', '思考', '行动步骤', '下一步', '行动建议'].includes(item))
-                }
-                renderItem={(item, idx) => (
-                  <List.Item>
-                    <span>{idx + 1}. {item}</span>
-                  </List.Item>
-                )}
-              />
+            <Card
+              title="推荐行动"
+              extra={
+                <Button
+                  size="small"
+                  type="link"
+                  onClick={() => {
+                    if (summaryControllerRef.current) summaryControllerRef.current.abort();
+                    summaryControllerRef.current = new AbortController();
+                    fetchSummary(summaryControllerRef.current.signal);
+                  }}
+                >
+                  换一批
+                </Button>
+              }
+            >
+              {recItems.length ? (
+                <List
+                  dataSource={recItems}
+                  renderItem={(item, idx) => (
+                    <RecommendationItem index={idx} item={item} onGo={navigate} />
+                  )}
+                />
+              ) : (
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description="还没有可执行的建议，先记录一次学习活动"
+                >
+                  <Button type="primary" onClick={() => navigate('/plan/internship')}>
+                    生成我的 7 天计划
+                  </Button>
+                </Empty>
+              )}
             </Card>
             )}
           </Col>
