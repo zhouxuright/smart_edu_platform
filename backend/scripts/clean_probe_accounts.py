@@ -51,9 +51,17 @@ async def business_tables(conn) -> list[tuple[str, str]]:
     return [(r[0], r[1]) for r in rows]
 
 
-# 按 document_id 挂在 documents 下面的子表。动态发现只找 user_id / owner_id 列，
-# 抓不到这一层，所以显式列出来——漏了它们 documents 就删不掉。
-DOCUMENT_CHILDREN = ("document_embeddings", "document_chunks")
+# 「孙表」：只靠 user_id / owner_id 的动态发现抓不到它们——它们通过父表主键
+# 关联，自己身上没有 user 列。漏掉任何一张，父表就永远被外键挡住删不掉。
+# 每条是 (子表, 子表外键列, 父表, 父表的用户列)。
+CHILD_TABLES = (
+    ("document_embeddings", "document_id", "documents", "owner_id"),
+    ("document_chunks", "document_id", "documents", "owner_id"),
+    # 工作流：agent_steps 只记 run_id，账号信息在 agent_runs 上
+    ("agent_steps", "run_id", "agent_runs", "user_id"),
+    # 会话：agent_messages 只记 session_id，账号信息在 agent_sessions 上
+    ("agent_messages", "session_id", "agent_sessions", "user_id"),
+)
 
 
 async def purge(conn, ids: list[int], tables: list[tuple[str, str]]) -> tuple[int, list[str]]:
@@ -65,20 +73,20 @@ async def purge(conn, ids: list[int], tables: list[tuple[str, str]]) -> tuple[in
     """
     total = 0
 
-    # 先清 documents 的子表，否则 documents 永远被外键挡住
-    for child in DOCUMENT_CHILDREN:
+    # 先清孙表，否则父表永远被外键挡住
+    for child, child_col, parent, parent_user_col in CHILD_TABLES:
         try:
             async with conn.begin_nested():
                 result = await conn.execute(
                     text(
-                        f'DELETE FROM "{child}" WHERE document_id IN '
-                        f"(SELECT id FROM documents WHERE owner_id = ANY(:ids))"
+                        f'DELETE FROM "{child}" WHERE "{child_col}" IN '
+                        f'(SELECT id FROM "{parent}" WHERE "{parent_user_col}" = ANY(:ids))'
                     ),
                     {"ids": ids},
                 )
             if result.rowcount:
                 total += result.rowcount
-                print(f"  清 {child}.document_id: {result.rowcount} 行")
+                print(f"  清 {child}.{child_col}: {result.rowcount} 行")
         except IntegrityError:
             print(f"  {child} 仍被外键挡住，跳过")
 
