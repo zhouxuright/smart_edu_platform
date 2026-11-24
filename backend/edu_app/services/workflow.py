@@ -398,8 +398,9 @@ async def resume_run(
         await db.commit()
         return run
 
-    # 顺序不能反：先推进再应用，应用失败会留下「流程往下走了但数据没改」的状态，
-    # 而且用户看不出问题——界面显示成功，简历其实没动。
+    # 顺序不能反：必须**先应用再推进**。反过来（先推进、后应用）一旦应用失败，
+    # 就会留下「流程往下走了但数据没改」的状态，而且用户看不出问题——
+    # 界面显示成功，简历其实没动。
     if proposal_id:
         try:
             await proposals.apply(db, user, proposal_id, expected_run_id=run.id)

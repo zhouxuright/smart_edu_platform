@@ -1580,6 +1580,16 @@ async def demo_seed_records(db: AsyncSession = Depends(get_db), current_user: Us
 
 @router.post("/agent/orchestrate")
 async def agent_orchestrate(db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user), _quota: bool = Depends(require_llm_quota)):
+    """两个分析并发跑，结果拼成一份文档。
+
+    **这不是多 Agent 编排**，别被名字骗了：没有状态机、没有共享黑板、
+    没有路由决策，只是 `asyncio.gather` 并发调两次模型。真正的多 Agent 协同
+    见 `services/workflow.py` 的 step-driven 流程（有状态、可恢复、可中断）。
+
+    原来两个分支都写了 `except: return "目标：…行动步骤：…"` 这种兜底文案。
+    已经删掉：模型失败时把写死的假分析当成 AI 结论返回、还存成文档，
+    比直接报错坏得多——用户没有任何办法分辨。
+    """
     r_res = await db.execute(select(LearningRecord).where(LearningRecord.user_id == current_user.id))
     records = r_res.scalars().all()
     p_res = await db.execute(select(StudentProfile).where(StudentProfile.user_id == current_user.id))
@@ -1591,32 +1601,21 @@ async def agent_orchestrate(db: AsyncSession = Depends(get_db), current_user: Us
         "name": current_user.full_name,
     }
     mentor_msg = "基于我的学习记录，给出下一周的学习行动清单，简洁分点。"
-    
-    async def get_mentor():
-        try:
-            return await mentor.get_mentor_response(profile_data, mentor_msg, [])
-        except Exception:
-            return "目标：制定下一周学习行动清单。\n行动步骤：\n1）复盘一次近期活动并归纳错题。\n2）为每科设定2个具体练习任务。\n3）安排一次讨论或阅读并输出笔记。\n结果/下一步：记录完成情况并下周复盘。"
-            
-    async def get_assess():
-        from edu_app.agents.assessment import analyze_performance
-        try:
-            return await analyze_performance(current_user.full_name, records)
-        except Exception:
-            return "目标：总结当前学习表现并指出改进方向。\n分析：存在薄弱主题，需要专项练习与频次提升。\n建议：增加练习与复盘频次，形成笔记与检查点。\n下一步：按科目执行并跟踪分数变化。"
 
-    mentor_text, assess_text = await asyncio.gather(get_mentor(), get_assess())
-    
+    from edu_app.agents.assessment import analyze_performance
+
+    mentor_text, assess_text = await asyncio.gather(
+        mentor.get_mentor_response(profile_data, mentor_msg, []),
+        analyze_performance(current_user.full_name, records),
+    )
+
     fused = f"综合导师建议：\n{mentor_text}\n\n评估总结：\n{assess_text}"
-    try:
-        title = f"AI 学习计划 - {datetime.now(UTC).strftime('%Y-%m-%d %H:%M')}"
-        doc = Document(title=title, content=fused, source_url=None, owner_id=current_user.id, tenant_id=getattr(current_user, "tenant_id", None))
-        db.add(doc)
-        await db.commit()
-        await db.refresh(doc)
-        return {"plan": fused, "document_id": doc.id}
-    except Exception:
-        return {"plan": fused}
+    title = f"AI 学习计划 - {datetime.now(UTC).strftime('%Y-%m-%d %H:%M')}"
+    doc = Document(title=title, content=fused, source_url=None, owner_id=current_user.id, tenant_id=getattr(current_user, "tenant_id", None))
+    db.add(doc)
+    await db.commit()
+    await db.refresh(doc)
+    return {"plan": fused, "document_id": doc.id}
 
 
 # 学习记录：创建真实记录
