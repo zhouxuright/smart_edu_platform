@@ -51,8 +51,12 @@ WORKDIR /app
 # libgomp1 是 faiss / torch 的 OpenMP 运行时，slim 镜像里没有，
 # 缺了会在 import faiss 时报 "libgomp.so.1: cannot open shared object file"
 # gosu 用于入口脚本里从 root 降权到 appuser（见 entrypoint.sh 的说明）
+# fonts-wqy-zenhei 是简历导出 PDF 用的中文字体。slim 镜像默认一个中文字体都没有，
+# 缺了会直接 503「服务器缺少中文字体」——本地有 Windows 字体所以测不出来，
+# 只有部署后才会暴露。路径 /usr/share/fonts/truetype/wqy/wqy-zenhei.ttc
+# 与 services/resume_pdf.py 的候选列表一致。
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libgomp1 curl gosu \
+    && apt-get install -y --no-install-recommends libgomp1 curl gosu fonts-wqy-zenhei \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt ./
