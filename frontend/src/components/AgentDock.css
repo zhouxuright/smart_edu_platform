@@ -344,6 +344,38 @@
   background: rgba(74, 108, 247, 0.06);
 }
 
+/* 追问按钮：挂在每条回答下面，点一下直接发出去。
+   用虚线边框和开场的建议区分开——开场建议是「不知道问什么」时的引导，
+   追问是「顺着这句话往下问」，两者的语气不一样。 */
+.agent-followups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.agent-followups button {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px dashed var(--plan-line);
+  background: transparent;
+  color: var(--plan-accent-deep);
+  font-size: 12px;
+  line-height: 1.6;
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.agent-followups button:hover {
+  border-style: solid;
+  border-color: var(--plan-accent);
+  background: rgba(74, 108, 247, 0.07);
+}
+
+.agent-followups button:active {
+  transform: scale(0.97);
+}
+
 .agent-input {
   display: flex;
   align-items: flex-end;

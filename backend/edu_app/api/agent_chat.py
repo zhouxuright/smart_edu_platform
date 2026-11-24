@@ -49,7 +49,8 @@ PAGE_LABEL = {
 }
 
 # 提案的有效期与执行逻辑统一在 services/proposals.py，这里不再重复定义
-MAX_HISTORY_TURNS = 6
+# 历史窗口的常量只在 services/memory.py 定义一份，这里直接引用——
+# 两个文件各写一个 6 迟早会改歪一个，而对齐它们的唯一线索是注释。
 
 
 def _llm_ready() -> bool:
@@ -98,7 +99,7 @@ def _build_system_prompt(
 
 输出要求：
 只输出一个 JSON 对象，不要 Markdown 代码块，不要任何解释性文字。
-{{"reply": "给用户看的中文回答", "action": null 或 {{"tool": "工具名", "args": {{...}}}}}}
+{{"reply": "给用户看的中文回答", "action": null 或 {{"tool": "工具名", "args": {{...}}}}, "followups": ["追问1", "追问2"]}}
 
 规则：
 1. 只依据上面的数据回答。数据里没有的信息，直说「这份数据里没有」，不要编造公司、数字、时间。
@@ -107,16 +108,30 @@ def _build_system_prompt(
 4. 改写要点时：每条以动词开头，保留原文的数字与结果，不新增原文没有的事实，每条不超过 60 字。
 5. 推进投递状态时，只能选数据里 can_move_to 列出的状态。
 6. 回答控制在 150 字以内，除非用户要求详细展开。
+7. followups 是 2~3 条用户可能接着问的话，用用户的口吻、像用户会打出来的短句（不超过 20 字），
+   不要复述用户刚问过的，不要问「还需要我帮你做什么吗」这类空话。它们会被渲染成可点击按钮，
+   点一下就直接发出，所以每条必须能独立成句、单独看得懂。
 """
 
 
 def _history_block(history: list) -> str:
+    """把最近若干轮对话拼成提示词片段。
+
+    窗口按「轮」算，一条问答占 2 条消息，所以必须乘 2。这里原来直接拿
+    `MAX_HISTORY_TURNS` 当**条数**截，实际只留了 3 轮（6 条）；而
+    `memory.load_history` 是按 `MAX_HISTORY_TURNS * 2` 取的，多取的一半
+    全被这里截掉——查了 12 条只用 6 条。
+
+    实测证据：埋一个暗号再填充 3 轮无关对话，第 4 轮就答不上来了，
+    而设计意图是 6 轮。
+    """
     lines = []
-    for item in (history or [])[-MAX_HISTORY_TURNS:]:
+    window = memory.MAX_HISTORY_TURNS * 2
+    for item in (history or [])[-window:]:
         if not isinstance(item, dict):
             continue
         role = "用户" if item.get("role") == "user" else "助手"
-        text = str(item.get("content") or "").strip()[:200]
+        text = str(item.get("content") or "").strip()[: memory.HISTORY_CHAR_LIMIT]
         if text:
             lines.append(f"{role}：{text}")
     if not lines:
@@ -124,22 +139,53 @@ def _history_block(history: list) -> str:
     return "此前的对话（仅供参考，不要照抄）：\n" + "\n".join(lines) + "\n\n"
 
 
-def _parse_decision(content: str) -> tuple[str, dict | None]:
+def _parse_decision(content: str) -> tuple[str, dict | None, list[str]]:
+    """拆出 (回答, 动作, 追问建议)。
+
+    追问建议是「可点即发」的按钮文案，所以这里必须清洗：模型偶尔会塞进
+    编号、引号、整段话，直接渲染成按钮会很难看，也可能点出去一个没法回答的问题。
+    """
     text = (content or "").strip()
     if not text:
-        return "", None
+        return "", None, []
     match = re.search(r"\{[\s\S]*\}", text)
     if not match:
-        return text, None
+        return text, None, []
     try:
         payload = json.loads(match.group(0))
     except json.JSONDecodeError:
-        return text, None
+        return text, None, []
     if not isinstance(payload, dict):
-        return text, None
+        return text, None, []
     reply = str(payload.get("reply") or "").strip() or "我没太理解，可以说得更具体一点吗？"
     action = payload.get("action")
-    return reply, action if isinstance(action, dict) else None
+    return reply, action if isinstance(action, dict) else None, _clean_followups(
+        payload.get("followups")
+    )
+
+
+def _clean_followups(raw) -> list[str]:
+    """把模型给的追问建议收敛成 2~3 条干净短句。
+
+    宁可少给也不给脏数据：按钮点下去就是一次真实请求，混进一句「（以上为建议）」
+    这种残句，用户点了只会得到一个莫名其妙的回答。
+    """
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for item in raw:
+        text = str(item or "").strip()
+        # 去掉模型爱加的前缀编号和包裹引号
+        text = re.sub(r"^[\s\-–—*•\d]+[.、)）]?\s*", "", text)
+        text = text.strip("「」“”\"'` ")
+        if not (4 <= len(text) <= 40):
+            continue
+        if text in out:
+            continue
+        out.append(text)
+        if len(out) >= 3:
+            break
+    return out
 
 
 async def _run_reads(page: str, page_id, db: AsyncSession, user: User) -> dict[str, dict]:
@@ -223,7 +269,7 @@ async def agent_chat(
         logger.exception("agent chat llm failed")
         raise HTTPException(status_code=503, detail="AI 暂时不可用，请稍后再试")
 
-    reply, action = _parse_decision(str(content or ""))
+    reply, action, followups = _parse_decision(str(content or ""))
     if not reply:
         raise HTTPException(status_code=503, detail="AI 没有返回内容，请重试")
 
@@ -254,6 +300,9 @@ async def agent_chat(
         "session_id": session.id,
         "context_used": list(reads.keys()),
         "memory_used": bool(memory_block or prev_summary),
+        # 追问建议只对「这一轮的回答」有意义，所以不落库：刷新后由下一轮重新生成，
+        # 比存一堆过期按钮更干净。
+        "followups": followups,
     }
 
 

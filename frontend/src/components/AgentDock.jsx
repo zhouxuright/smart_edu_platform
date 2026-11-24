@@ -204,10 +204,11 @@ function ProposalCard({ proposal, decided, busy, onDecide }) {
 
 /* ------------------------------------------------------------------ 气泡 */
 
-function Bubble({ item, index, busyId, onDecide }) {
+function Bubble({ item, index, busyId, onDecide, isLast, sending, onFollowup }) {
   if (item.role === 'user') {
     return <div className="agent-msg is-user">{item.content}</div>;
   }
+  const followups = item.followups || [];
   return (
     <div className="agent-msg is-bot">
       {item.loading ? (
@@ -227,6 +228,17 @@ function Bubble({ item, index, busyId, onDecide }) {
               busy={busyId === item.proposal.id}
               onDecide={(accept) => onDecide(index, item.proposal, accept)}
             />
+          )}
+          {/* 追问按钮只挂在最后一条回答上：再往上的建议已经和当前话题脱节，
+              点下去只会把对话拽回旧话题。发送中不显示，避免连点发出两轮。 */}
+          {isLast && !sending && followups.length > 0 && (
+            <div className="agent-followups">
+              {followups.map((text) => (
+                <button type="button" key={text} onClick={() => onFollowup(index, text)}>
+                  {text}
+                </button>
+              ))}
+            </div>
           )}
         </>
       )}
@@ -344,6 +356,7 @@ const AgentDock = ({ standalone = false }) => {
             content: data.reply,
             proposal: data.proposal || null,
             notice: data.notice || null,
+            followups: data.followups || [],
           };
           return next;
         });
@@ -388,6 +401,19 @@ const AgentDock = ({ standalone = false }) => {
       }
     },
     [messageApi],
+  );
+
+  /* 点追问按钮 = 直接把这句话当成用户输入发出去，进入下一轮。
+     先把这组按钮清掉：否则下一轮回答回来之前它们还在，连点两下会发出两个
+     一模一样的请求，而且第二个会被 `sending` 静默吞掉，用户以为没反应。 */
+  const followup = useCallback(
+    (index, text) => {
+      setMessages((prev) =>
+        prev.map((item, i) => (i === index ? { ...item, followups: [] } : item)),
+      );
+      send(text);
+    },
+    [send],
   );
 
   const onKeyDown = (event) => {
@@ -451,6 +477,9 @@ const AgentDock = ({ standalone = false }) => {
                 index={index}
                 busyId={busyId}
                 onDecide={decide}
+                isLast={index === messages.length - 1}
+                sending={sending}
+                onFollowup={followup}
               />
             ))}
 
