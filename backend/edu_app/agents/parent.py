@@ -23,16 +23,11 @@ async def generate_parent_report(student_name: str, records: list, feedback: str
             "feedback": feedback
         }), timeout=12)
         return response.content
-    except Exception:
-        return (
-            "目标：为家长生成孩子的学习进度周报与家庭辅导计划。\n"
-            "思考：结合近期记录，保持积极与关怀，突出可执行安排。\n"
-            "行动步骤：\n"
-            "1）家长与孩子共同复盘一次近期活动，形成3条改进要点。\n"
-            "2）本周安排两次专项练习与一次讨论，明确负责人与时间。\n"
-            "3）每天10分钟阅读或错题整理，周末进行总结与反馈。\n"
-            "结果/下一步：记录完成度与收获，下周调整计划与重点。"
-        )
+    except Exception as error:
+        # 不返回模板报告。原来这里兜一段「目标：…行动步骤：…」，
+        # 家长拿到的是**看起来像分析**的假内容，而他没有任何办法分辨。
+        # 没配模型时 `get_llm()` 已经会返回本地回退，能走到这里的都是真失败。
+        raise RuntimeError(f"家长报告生成失败：{error}") from error
 
 async def generate_parent_report_stream(student_name: str, records: list, feedback: str):
     llm = get_llm(temperature=0.6)
@@ -55,14 +50,7 @@ async def generate_parent_report_stream(student_name: str, records: list, feedba
             "feedback": feedback
         }):
             yield chunk.content
-    except Exception:
-        fallback = (
-            "目标：为家长生成孩子的学习进度周报与家庭辅导计划。\n"
-            "思考：结合近期记录，保持积极与关怀，突出可执行安排。\n"
-            "行动步骤：\n"
-            "1）家长与孩子共同复盘一次近期活动，形成3条改进要点。\n"
-            "2）本周安排两次专项练习与一次讨论，明确负责人与时间。\n"
-            "3）每天10分钟阅读或错题整理，周末进行总结与反馈。\n"
-            "结果/下一步：记录完成度与收获，下周调整计划与重点。"
-        )
-        yield fallback
+    except Exception as error:
+        # 流式已经发出了 200 响应头，没法再改成错误码。这里只能把「失败」
+        # 如实写进内容里，绝不能拿一段模板报告冒充分析结果。
+        yield f"\n\n（报告生成失败：{error}。请稍后重试。）"

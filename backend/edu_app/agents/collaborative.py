@@ -32,15 +32,8 @@ async def facilitate_discussion(topic: str, current_discussion: list):
             "history": history_text
         }), timeout=15)
         return response.content
-    except Exception:
-        return (
-            "思考：促进讨论聚焦，综合观点并形成清晰结论与行动。\n"
-            "行动建议：\n"
-            "1）围绕主题提出两个关键问题，鼓励每人给出例证。\n"
-            "2）提炼共识与分歧，形成3条可执行任务与截止时间。\n"
-            "角色分配：明确负责人与协作方式，记录检查点。\n"
-            "决定与下一步：设定复盘时间与产出要求，跟踪完成度。"
-        )
+    except Exception as error:
+        raise RuntimeError(f"讨论引导生成失败：{error}") from error
 
 async def facilitate_discussion_stream(topic: str, current_discussion: list):
     llm = get_llm(temperature=0.8)
@@ -66,13 +59,5 @@ async def facilitate_discussion_stream(topic: str, current_discussion: list):
             "history": history_text
         }):
             yield chunk.content
-    except Exception:
-        fallback = (
-            "思考：促进讨论聚焦，综合观点并形成清晰结论与行动。\n"
-            "行动建议：\n"
-            "1）围绕主题提出两个关键问题，鼓励每人给出例证。\n"
-            "2）提炼共识与分歧，形成3条可执行任务与截止时间。\n"
-            "角色分配：明确负责人与协作方式，记录检查点。\n"
-            "决定与下一步：设定复盘时间与产出要求，跟踪完成度。"
-        )
-        yield fallback
+    except Exception as error:
+        yield f"\n\n（讨论引导生成失败：{error}。请稍后重试。）"

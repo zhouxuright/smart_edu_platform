@@ -40,15 +40,9 @@ async def analyze_performance(student_name: str, records: list):
         return response.content
     except Exception as e:
         logging.error(f"Assessment agent error: {e}")
-        return (
-            "目标：总结当前学习表现并给出改进与行动计划。\n"
-            "分析：基于最近记录，识别优势与薄弱主题，明确提升方向。\n"
-            "行动步骤：\n"
-            "1）为薄弱主题安排两次专项练习并整理错题本。\n"
-            "2）针对最近一次活动完成复盘，记录要点与检查点。\n"
-            "3）制定一周计划：每天10-15分钟巩固练习与笔记整理。\n"
-            "评估与下一步：跟踪分数变化与完成度，下周复盘并更新计划。"
-        )
+        # 原来这里返回一份模板评估。它读起来像分析结论，实际与这个学生无关，
+        # 而家长/学生无法分辨——失败就该是失败。
+        raise RuntimeError(f"学习评估生成失败：{e}") from e
 
 async def analyze_performance_stream(student_name: str, records: list):
     llm = get_llm(temperature=0.5)
@@ -77,14 +71,6 @@ async def analyze_performance_stream(student_name: str, records: list):
             "records": records_text
         }):
             yield chunk.content
-    except Exception:
-        fallback = (
-            "目标：总结当前学习表现并给出改进与行动计划。\n"
-            "分析：基于最近记录，识别优势与薄弱主题，明确提升方向。\n"
-            "行动步骤：\n"
-            "1）为薄弱主题安排两次专项练习并整理错题本。\n"
-            "2）针对最近一次活动完成复盘，记录要点与检查点。\n"
-            "3）制定一周计划：每天10-15分钟巩固练习与笔记整理。\n"
-            "评估与下一步：跟踪分数变化与完成度，下周复盘并更新计划。"
-        )
-        yield fallback
+    except Exception as error:
+        # 流式已经发出 200 头，改不了状态码，只能把失败如实写进内容
+        yield f"\n\n（评估生成失败：{error}。请稍后重试。）"

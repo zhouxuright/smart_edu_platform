@@ -421,7 +421,9 @@ async def mentor_agent(request: schemas.MentorRequest, db: AsyncSession = Depend
             "结果/下一步：理解缩放的数值稳定性作用；可进一步推导方差与梯度关系并在实验中观察训练曲线。\n"
             "结论：除以 √d_k 是对 q·k 的标准化，避免随维度增大导致 softmax 饱和与训练不稳定。"
         )
-        return {"response": quick}
+        # 这是写死的示例答案，不是模型生成。不标 source 的话前端会显示成「AI 导师」，
+        # 等于把模板冒充成回答。
+        return {"response": quick, "source": "fallback"}
     try:
         response = await mentor.get_mentor_response(profile_data, msg, history)
     except Exception:
@@ -532,7 +534,7 @@ async def mentor_agent_stream(request: schemas.MentorRequest, db: AsyncSession =
                 "结果/下一步：掌握缩放的数值稳定性作用，进一步结合实验验证。"
             )
             for chunk in text.split("\n"):
-                yield f"data: {json.dumps({'content': chunk + '\n'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'content': chunk + '\n', 'source': 'fallback'}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
             return
         if not used_llm:
@@ -731,6 +733,7 @@ async def mentor_agent_websocket(websocket: WebSocket):
                         "行动步骤：\n1）推导 q·k 方差≈d_k；\n2）使用 q·k/√d_k 归一化；\n3）对比未缩放与缩放的训练曲线与梯度。\n"
                         "结果/下一步：掌握缩放的数值稳定性作用，进一步结合实验验证。"
                     )
+                    await websocket.send_text("（本地示例回答，非模型生成）\n")
                     await websocket.send_text(quick)
                     await websocket.send_text("[DONE]")
                     continue
@@ -1343,9 +1346,9 @@ async def assessment_agent(request: schemas.AssessmentRequest, db: AsyncSession 
         report = await assessment.analyze_performance(user.full_name, records)
     except Exception as e:
         logging.error(f"Assessment agent failed: {e}")
-        lines = [f"- {getattr(r, 'subject', '')} {getattr(r, 'topic', '')}: {getattr(r, 'score', '')}" for r in records][:6]
-        base = "目标：基于学习记录给出评估与行动。\n思考：按成绩与活动类型梳理优势与薄弱。\n行动步骤：\n1）对低于90分的主题进行错题归纳与专项练习。\n2）为最近一次活动输出复盘笔记并设定下一步目标。\n3）每科补充2次练习并记录得分，观察提升。\n结果/下一步：一周后复盘并更新学习计划。\n记录：\n" + "\n".join(lines)
-        report = base
+        # 原来这里拼一段写死的评估当结果返回。它读起来像分析结论，
+        # 实际跟这个学生的记录没有因果关系——失败就该如实报失败。
+        raise HTTPException(status_code=502, detail=str(e) or "学习评估生成失败，请稍后重试")
     return {"report": report}
 
 
@@ -1362,9 +1365,8 @@ async def collaborative_agent(request: schemas.CollaborativeRequest, current_use
     logging.info(f"collab.local topic_len={len(topic)} hist_len={len(history)}")
     try:
         response = await collaborative.facilitate_discussion(topic, history)
-    except Exception:
-        lines = [f"{m.get('user', '成员')}: {m.get('content', '')}" for m in history][:5]
-        response = "思考：围绕主题组织一次有效讨论。\n行动建议：\n1）每人提出一个关键问题并给出观点。\n2）总结共识与分歧，形成3条行动项及负责人。\n3）设定下次跟进时间与目标。\n角色分配：自选负责人完成行动项。\n决定与下一步：按上述执行并在下次会议复盘。\n当前讨论片段：\n" + "\n".join(lines)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e) or "讨论引导生成失败，请稍后重试")
     return {"response": response}
 
 @router.post("/agent/parent")
@@ -1382,9 +1384,10 @@ async def parent_agent(request: schemas.ParentReportRequest, db: AsyncSession = 
         
     try:
         report = await parent.generate_parent_report(user.full_name, records, "表现很好！")
-    except Exception:
-        items = [f"{getattr(r, 'subject', '')}: {getattr(r, 'score', '')}" for r in records][:5]
-        report = "目标：为家长生成孩子的学习周报与辅导计划。\n思考：近期记录显示科目参与与成绩情况。\n行动步骤：\n1）家长与孩子共同复盘一次近期活动。\n2）针对薄弱主题安排2次练习与一次讨论。\n3）每晚完成10分钟知识点巩固并记录。\n结果/下一步：一周后查看提升并调整计划。\n近期记录：\n" + "\n".join(items)
+    except Exception as error:
+        # 原来这里兜一段写死的「目标：…近期记录：…」，把失败包装成一份报告。
+        # 家长看到的是「分析」，其实是模板——这比报错坏得多，因为他没法分辨。
+        raise HTTPException(status_code=502, detail=str(error) or "家长报告生成失败，请稍后重试")
     return {"report": report}
 
 
@@ -2659,6 +2662,24 @@ async def create_saas_tenant(payload: schemas.TenantCreate, db: AsyncSession = D
 
 @router.post("/saas/order/create")
 async def create_subscription_order(payload: schemas.SubscriptionOrderCreate, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """创建充值/订阅订单。
+
+    这里**只建单，不收款**。原来直接把 `payment_status` 写成 "paid"、
+    还回「充值已即时生效」，等于没有支付网关也能凭空充值——一旦有人基于它做计费
+    就是资损，而且账面上看不出来。现在订单停在 pending，等真实回调或人工确认。
+    """
+    if getattr(current_user, "role", "student") != "admin":
+        raise HTTPException(status_code=403, detail="只有系统管理员可以创建充值订单")
+
+    if payload.amount is None or payload.amount <= 0:
+        raise HTTPException(status_code=400, detail="订单金额必须大于 0")
+    if payload.order_type not in ("plan_subscription", "token_topup"):
+        raise HTTPException(status_code=400, detail="订单类型只能是 plan_subscription 或 token_topup")
+
+    tenant = await db.get(saas.Tenant, payload.tenant_id)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="租户不存在")
+
     order_id = f"ORD_{uuid.uuid4().hex[:12].upper()}"
     order = saas.SubscriptionOrder(
         id=order_id,
@@ -2666,11 +2687,42 @@ async def create_subscription_order(payload: schemas.SubscriptionOrderCreate, db
         amount=payload.amount,
         order_type=payload.order_type,
         payment_channel=payload.payment_channel or "wechat_pay",
-        payment_status="paid"  # 模拟支付完成
+        payment_status="pending",
     )
     db.add(order)
     await db.commit()
-    return {"order_id": order.id, "payment_status": "paid", "message": "订单创建成功，充值已即时生效"}
+    return {
+        "order_id": order.id,
+        "payment_status": "pending",
+        "amount": payload.amount,
+        "message": "订单已创建，待支付。接入支付网关后由回调置为 paid；当前可先人工确认。",
+    }
+
+
+@router.post("/saas/order/{order_id}/confirm")
+async def confirm_subscription_order(order_id: str, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """人工确认收款（对账用）。只有 admin 能调。
+
+    做成独立接口而不是在创建时置 paid：收款是一个**可审计的独立事件**，
+    谁在什么时候确认的、原状态是什么，都要留下痕迹。等接了真实支付网关，
+    回调直接打这个逻辑即可，前端和账目口径都不用改。
+    """
+    if getattr(current_user, "role", "student") != "admin":
+        raise HTTPException(status_code=403, detail="只有系统管理员可以确认收款")
+
+    order = await db.get(saas.SubscriptionOrder, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="订单不存在")
+
+    if order.payment_status == "paid":
+        # 幂等：重复确认不该报错，也不该重复入账
+        return {"order_id": order.id, "payment_status": "paid", "already_paid": True}
+    if order.payment_status not in ("pending", "failed"):
+        raise HTTPException(status_code=409, detail=f"订单当前状态为 {order.payment_status}，不能确认收款")
+
+    order.payment_status = "paid"
+    await db.commit()
+    return {"order_id": order.id, "payment_status": "paid", "already_paid": False}
 
 # ==========================================
 # V3.0.0 阶段接口：艾宾浩斯自适应复练与长期记忆

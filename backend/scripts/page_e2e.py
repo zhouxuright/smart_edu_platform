@@ -373,6 +373,16 @@ def main() -> int:
                     code, body = call(base, "GET", f"/api/dashboard/summary?student_id={child_id}", parent_token)
                     check("撤销后家长立即失去访问", code == 403, f"HTTP {code}")
 
+    # ---- 13. 计费接口不该被普通用户碰 ----
+    # 订单创建/确认都是 admin 专属。普通学生能建单，等于谁都能给自己充值。
+    code, body = call(base, "POST", "/api/saas/order/create", token, {
+        "tenant_id": "TEN_ANY", "amount": 299, "order_type": "token_topup",
+    })
+    check("计费：学生不能创建充值订单", code == 403, f"HTTP {code}")
+
+    code, body = call(base, "POST", "/api/saas/order/ORD_FAKE/confirm", token, {})
+    check("计费：学生不能确认收款", code == 403, f"HTTP {code}")
+
     print(f"\n通过 {PASS}，失败 {FAIL}")
     if FAILED:
         print("\n失败明细：")

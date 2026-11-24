@@ -63,15 +63,7 @@ async def get_mentor_response(user_profile: dict, message: str, chat_history: li
             }), timeout=10)
             return alt_resp.content if hasattr(alt_resp, "content") else str(alt_resp or "")
         return content
-    except Exception:
-        fallback = (
-            "目标：根据学生画像与提问给出清晰解释与行动。\n"
-            "思考：当前使用本地回退生成，优先保证响应与可执行性。\n"
-            "行动步骤：\n"
-            "1）明确关键概念，记录已知与待解点。\n"
-            "2）选择两种方法进行演示并做要点摘记。\n"
-            "3）形成3条练习题与检查点并安排时间。\n"
-            "结果/下一步：完成练习后复盘并更新薄弱项。\n"
-            f"问题：{message}"
-        )
-        return fallback
+    except Exception as error:
+        # 不再返回「看起来像回答」的模板文本。没配模型时 get_llm() 会返回
+        # 本地回退并正常返回，能走到这里的都是真失败，应该让调用方知道。
+        raise RuntimeError(f"导师回复生成失败：{error}") from error
