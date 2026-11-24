@@ -143,6 +143,51 @@ python -c "import secrets; print(secrets.token_urlsafe(48))"
 
 首次构建约 **10-12 分钟**（要装 node_modules 和 Python 依赖）。
 
+#### 2.1 用 CLI 手动部署（踩过：`railway up` 报 os error 5）
+
+在仓库根目录直接 `railway up` 会停在 `Indexing...` 然后报
+`拒绝访问。 (os error 5)`——**索引阶段就失败**，跟 Dockerfile 无关。
+同一台机器上把仓库导出成干净副本再上传就正常，说明是本地工作区里
+某个文件让 CLI 的遍历卡住（`.git`、`node_modules`、Milvus 数据卷、
+中文名的 PDF 附件都在候选里，没有逐一验证）。
+
+不要在这上面耗时间，直接用导出副本上传。副作用反而是好的：
+只传 git 追踪的约 2.5MB，而不是把 node_modules 和 .git 一起打包。
+
+```bash
+cd /path/to/smart_edu_platform
+rm -rf /tmp/qc_deploy && mkdir -p /tmp/qc_deploy
+git archive HEAD | tar -x -C /tmp/qc_deploy
+cd /tmp/qc_deploy
+railway up --ci \
+  --service qicheng \
+  --project 3cbf4947-b10f-4645-9525-e1b153a19006 \
+  --environment production
+```
+
+`--ci` 流式打印构建日志并在结束时退出；不加会进交互界面。
+
+**上传的是 HEAD，不是工作区**，所以必须先 commit 再部署，未提交的改动不会上去。
+
+部署完核对（`/api/agent/flows` 返回 404 说明新代码没上去，401 才是对的）：
+
+```bash
+curl -s https://<域名>/api/health
+curl -s -o /dev/null -w "%{http_code}\n" https://<域名>/api/agent/flows
+```
+
+要在生产容器里跑脚本（清理探针账号、查库），用 `railway ssh`：
+
+```bash
+railway ssh --service qicheng \
+  --project 3cbf4947-b10f-4645-9525-e1b153a19006 \
+  --environment production \
+  "cd /app && python scripts/clean_probe_accounts.py"
+```
+
+`railway run` 拿不到库：容器里的 `DATABASE_URL` 指向 `postgres.railway.internal`，
+那是 Railway 内网域名，本机连不上。要连生产库只能在容器里跑。
+
 ### 3. 初始化
 
 **建表不用管**：`main.py` 的 lifespan 里跑 `Base.metadata.create_all`，
